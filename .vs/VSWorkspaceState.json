@@ -1,0 +1,12 @@
+{
+  "ExpandedNodes": [
+    "",
+    "\\app",
+    "\\app\\Console",
+    "\\app\\Http",
+    "\\app\\Http\\Controllers",
+    "\\app\\Http\\Controllers\\Api"
+  ],
+  "SelectedNode": "\\app\\Http\\Controllers\\Api\\DelegationsController.php",
+  "PreviewInSolutionExplorer": false
+}
