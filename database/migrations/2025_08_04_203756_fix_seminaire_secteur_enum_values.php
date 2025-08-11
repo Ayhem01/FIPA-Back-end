@@ -12,9 +12,6 @@ return new class extends Migration
      */
     public function up(): void
     {
-           // Vérifier si la table existe
-           $tableName = 'seminaires_j_i_secteurs';
-        
         // Correction pour inclure
         DB::statement('ALTER TABLE seminaires_j_i_secteurs MODIFY inclure VARCHAR(30)');
         DB::statement("UPDATE seminaires_j_i_secteurs SET inclure = 'comptabilisée' WHERE inclure = ' comptabilisée'");

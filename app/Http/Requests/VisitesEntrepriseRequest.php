@@ -33,7 +33,7 @@ class VisitesEntrepriseRequest extends FormRequest
             'email' => 'nullable|email|max:255',
             'site_web' => 'nullable|url|max:255',
             'date_visite' => $isUpdate ? 'nullable|date' : 'required|date',
-                'pr' => 'nullable|in:Prévue,Réalisée',
+            'pr' => 'nullable|in:Prévue,Réalisée',
             'responsable_suivi_id' => 'nullable|exists:responsable_suivi,id',
             'programme_pdf' => 'nullable|file|mimes:pdf|max:2048',
             'services_appreciation' => 'nullable|string',

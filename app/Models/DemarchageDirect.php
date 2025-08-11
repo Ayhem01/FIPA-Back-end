@@ -41,8 +41,16 @@ class DemarchageDirect extends Model
         'lettre_argumentaire',
         'nb_reponses_positives',
         'resultat_action',
-        'evaluation_action'
+        'evaluation_action',
+        'action_id'
     ];
+
+    public static function createFromAction($action, $request)
+    {
+        $data = $request->only((new self)->getFillable());
+        $data['action_id'] = $action->id;
+        return self::create($data);
+    }
 
     public function initiateur()
     {

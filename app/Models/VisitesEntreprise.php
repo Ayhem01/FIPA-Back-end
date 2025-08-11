@@ -29,8 +29,33 @@ class VisitesEntreprise extends Model
         'pr',
         'responsable_suivi_id',
         'programme_pdf',
-        'services_appreciation'
+        'services_appreciation',
+        'action_id'
     ];
+
+    public static function createFromAction($action, $request)
+    {
+        $data = $request->only((new self)->getFillable());
+        $data['action_id'] = $action->id;
+        return self::create($data);
+    }
+    public static function updateFromAction($action, $request)
+{
+    // Trouver l'entité existante ou en créer une nouvelle
+    $entity = self::where('action_id', $action->id)->first();
+    
+    if (!$entity) {
+        return self::createFromAction($action, $request);
+    }
+    
+    // Récupérer uniquement les champs fillable de ce modèle
+    $data = $request->only((new self)->getFillable());
+    
+    // Mettre à jour
+    $entity->update($data);
+    
+    return $entity;
+}
 
     public function initiateur()
     {

@@ -26,9 +26,16 @@ class Delegations extends Model
         'groupe_id',
         'programme_visite',
         'evaluation_suivi',
-        'liste_membres_pdf'
+        'liste_membres_pdf',
+        'action_id'
     ];
 
+    public static function createFromAction($action, $request)
+{
+    $data = $request->only((new self)->getFillable());
+    $data['action_id'] = $action->id;
+    return self::create($data);
+}
     public function responsableFipa()
     {
         return $this->belongsTo(ResponsableFipa::class, 'responsable_fipa_id');

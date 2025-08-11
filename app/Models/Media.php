@@ -41,8 +41,16 @@ class Media extends Model
         'media_contact',
         'evaluation',
         'reconduction',
-        'commentaires_specifiques'
+        'commentaires_specifiques',
+        'action_id'
     ];
+
+    public static function createFromAction($action, $request)
+{
+    $data = $request->only((new self)->getFillable());
+    $data['action_id'] = $action->id;
+    return self::create($data);
+}
 
     public function responsableBureau()
     {

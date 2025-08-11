@@ -56,9 +56,16 @@ class SalonSectoriels extends Model
         'resultat_veille_technologique',
         'relation_institutions',
         'evaluation_recommandations',
-        'contacts_realises'
+        'contacts_realises',
+        'action_id'
     ];
 
+    public static function createFromAction($action, $request)
+    {
+        $data = $request->only((new self)->getFillable());
+        $data['action_id'] = $action->id;
+        return self::create($data);
+    }
     public function initiateur()
     {
         return $this->belongsTo(Initiateurs::class, 'initiateur_id');

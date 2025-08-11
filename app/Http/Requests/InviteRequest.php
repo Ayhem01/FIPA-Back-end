@@ -34,8 +34,7 @@ class InviteRequest extends FormRequest
             'statut' => [
                 'nullable',
                 Rule::in([
-                    'en_attente', 'envoyee', 'confirmee', 'refusee', 'details_envoyes', 
-                    'participation_confirmee', 'participation_sans_suivi', 'absente', 'aucune_reponse'
+                    'en_attente','confirmee', 'refusee'
                 ])
             ],
             'suivi_requis' => 'boolean',

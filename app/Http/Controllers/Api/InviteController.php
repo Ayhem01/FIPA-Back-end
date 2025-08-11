@@ -120,7 +120,7 @@ class InviteController extends Controller
             $invite = Invite::findOrFail($id);
             
             $validator = Validator::make($request->all(), [
-                'statut' => 'required|in:en_attente,envoyee,confirmee,refusee,details_envoyes,participation_confirmee,participation_sans_suivi,absente,aucune_reponse'
+                'statut' => 'required|in:en_attente,confirmee,refusee'
             ]);
 
             if ($validator->fails()) {

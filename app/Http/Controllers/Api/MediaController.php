@@ -26,7 +26,8 @@ class MediaController extends Controller
             return MediaExceptionHandler::handle($e);
         }
     }
-
+    
+    
 
     public function show($id)
     {

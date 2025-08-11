@@ -56,9 +56,15 @@ class SeminairesJISecteur extends Model
         'nb_articles_presse',
         'fichier_presence',
         'evaluation_recommandations',
-        'contacts_realises'
+        'contacts_realises',
+        'action_id'
     ];
-
+    public static function createFromAction($action, $request)
+    {
+        $data = $request->only((new self)->getFillable());
+        $data['action_id'] = $action->id;
+        return self::create($data);
+    }
 
     public function responbsablefipa()
     {

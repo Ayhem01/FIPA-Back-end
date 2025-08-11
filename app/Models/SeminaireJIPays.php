@@ -53,9 +53,15 @@ class SeminaireJIPays extends Model
         'nb_institutionnels',
         'nb_articles_presse',
         'fichier_pdf',
-        'evalutation_recommandation'
+        'evalutation_recommandation',
+        'action_id'
     ];
-
+    public static function createFromAction($action, $request)
+    {
+        $data = $request->only((new self)->getFillable());
+        $data['action_id'] = $action->id;
+        return self::create($data);
+    }
     public function responsable_fipa()
     {
         return $this->belongsTo(ResponsableFipa::class, 'responsable_fipa_id');

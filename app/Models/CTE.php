@@ -28,10 +28,16 @@ class CTE extends Model
         'historique_date_debut',
         'historique_ste',
         'historique_poste',
-        'historique_date_fin'
+        'historique_date_fin',
+        'action_id'    
     ];
 
-
+    public static function createFromAction($action, $request)
+{
+    $data = $request->only((new self)->getFillable());
+    $data['action_id'] = $action->id;
+    return self::create($data);
+}
 
     public function initiateur()
     {

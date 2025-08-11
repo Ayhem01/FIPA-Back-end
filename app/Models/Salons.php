@@ -51,9 +51,15 @@ class Salons extends Model
         'resultat_veille_technologique',
         'resultat_relation_institutions',
         'evaluation_recommandations',
-        'contacts_realises'
+        'contacts_realises',
+        'action_id'
     ];
-
+    public static function createFromAction($action, $request)
+    {
+        $data = $request->only((new self)->getFillable());
+        $data['action_id'] = $action->id;
+        return self::create($data);
+    }
     public function binomes()
     {
         return $this->belongsTo(Binomes::class, 'binome_id');

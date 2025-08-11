@@ -44,10 +44,10 @@ class Action extends Model
     /**
      * L'entreprise associée à cette action
      */
-    public function entreprise()
-    {
-        return $this->belongsTo(Entreprise::class);
-    }
+    // public function entreprise()
+    // {
+    //     return $this->belongsTo(Entreprise::class);
+    // }
 
     /**
      * Le responsable de l'action
@@ -83,4 +83,42 @@ class Action extends Model
         return $query->where('date_debut', '<', now())
                      ->orWhere('statut', 'terminee');
     }
+
+    public function media()
+{
+    return $this->hasOne(Media::class, 'action_id');
+}
+public function cte()
+{
+    return $this->hasOne(CTE::class, 'action_id');
+}
+public function visiteEntreprise()
+{
+    return $this->hasOne(VisitesEntreprise::class, 'action_id');
+
+}
+public function delegation()
+{
+    return $this->hasOne(Delegations::class, 'action_id');
+}
+public function salonSectoriel()
+{
+    return $this->hasOne(SalonSectoriels::class, 'action_id');
+}
+public function demarchageDirect()
+{
+    return $this->hasOne(DemarchageDirect::class, 'action_id');
+}
+public function seminaireJIPays()
+{
+    return $this->hasOne(SeminaireJIPays::class, 'action_id');
+}
+public function seminaireJISecteur()
+{
+    return $this->hasOne(seminairesJISecteur::class, 'action_id');
+}
+public function salon()
+{
+    return $this->hasOne(Salons::class, 'action_id');
+}
 }
