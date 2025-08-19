@@ -34,6 +34,7 @@ use App\Http\Controllers\Api\EntrepriseController;
 use App\Http\Controllers\Api\ActionController;
 use App\Http\Controllers\Api\EtapeController;
 use App\Http\Controllers\Api\ContactController;
+use App\Http\Controllers\Api\ProspectController;
 use GuzzleHttp\Middleware;
 use Illuminate\Support\Facades\Mail;
 
@@ -295,7 +296,15 @@ Route::group(['namespace' => 'Api', 'prefix' => 'invites'], function () {
   Route::patch('/{id}/status', [InviteController::class, 'updateStatus']);
   Route::delete('/{id}', [InviteController::class, 'destroy']);
   Route::get('/entreprise/{entrepriseId}', [InviteController::class, 'getByEntreprise']);
-});
+  Route::post('{id}/send', [InviteController::class, 'sendInvitation']);
+    Route::get('confirm/{token}', [InviteController::class, 'confirm'])->name('invitations.confirm');
+    Route::get('decline/{token}', [InviteController::class, 'decline'])->name('invitations.decline');
+    Route::post('{id}/pipeline/initialize', [InviteController::class, 'initializePipeline']);
+    Route::post('{id}/pipeline/advance', [InviteController::class, 'advanceStage']);
+    Route::post('{id}/convert-to-prospect', [InviteController::class, 'convertToProspect']);
+    Route::get('{id}/pipeline', [InviteController::class, 'getPipelineStatus']);
+
+   });
 Route::group(['namespace' => 'Api', 'prefix' => 'entreprises'], function () {
   Route::get('/', [EntrepriseController::class, 'index']);
   Route::post('/', [EntrepriseController::class, 'store']);
@@ -334,6 +343,19 @@ Route::group(['namespace' => 'Api', 'prefix' => 'contacts'], function () {
   Route::put('/{id}/set-primary', [ContactController::class, 'setPrimary']);
   Route::get('/entreprise/{entrepriseId}', [ContactController::class, 'getByEntreprise']);
   Route::get('/search/quick', [ContactController::class, 'search']);
+});
+Route::group(['namespace' => 'Api', 'prefix' => 'prospects'], function () {
+  Route::get('/', [ProspectController::class, 'index']);
+  Route::post('/', [ProspectController::class, 'store']);
+  Route::get('/{id}', [ProspectController::class, 'show']);
+  Route::put('/{id}', [ProspectController::class, 'update']);
+  Route::delete('/{id}', [ProspectController::class, 'destroy']);
+  Route::get('/entreprise/{entrepriseId}', [ProspectController::class, 'getByEntreprise']);
+  Route::get('/stats', [ProspectController::class, 'stats']);
+  Route::post('/{id}/pipeline/initialize', [ProspectController::class, 'initializePipeline']);
+  Route::post('/{id}/pipeline/advance', [ProspectController::class, 'advanceStage']);
+  Route::get('/{id}/pipeline', [ProspectController::class, 'getPipelineStatus']);
+  Route::post('/{id}/convert-to-investor', [ProspectController::class, 'convertToInvestor']);
 });
 
 

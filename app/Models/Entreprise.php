@@ -31,8 +31,7 @@ class Entreprise extends Model
         'statut', // actif, inactif, prospect, client, etc.
         'type', // entreprise, organisme public, association, etc.
         'proprietaire_id', // utilisateur responsable
-        'pipeline_stage_id',
-        'pipeline_type_id',
+       
     ];
 
     protected $casts = [
@@ -73,21 +72,10 @@ class Entreprise extends Model
         return $this->belongsTo(User::class, 'proprietaire_id');
     }
 
-    /**
-     * L'étape de pipeline actuelle de l'entreprise
-     */
-    public function pipelineStage()
-    {
-        return $this->belongsTo(PipelineStage::class);
-    }
+    
+    
 
-    /**
-     * Le type de pipeline de l'entreprise
-     */
-    public function pipelineType()
-    {
-        return $this->belongsTo(ProjectPipelineType::class, 'pipeline_type_id');
-    }
+  
 
     /**
      * Les projets liés à cette entreprise
@@ -166,4 +154,23 @@ class Entreprise extends Model
     {
         return $query->where('secteur_id', $secteurId);
     }
+    public function invitesActifs()
+{
+    return $this->hasMany(Invite::class)
+                ->where('statut', 'confirmee')
+                ->orWhere('statut', 'participee');
+}
+
+// Pour obtenir l'étape la plus avancée de tous les invités d'une entreprise
+public function etapePlusAvancee()
+{
+    return $this->hasManyThrough(
+        InvitePipelineStage::class,
+        Invite::class,
+        'entreprise_id', // Clé étrangère sur invites
+        'id',           // Clé locale sur stages
+        'id',           // Clé locale sur entreprises
+        'pipeline_stage_id' // Clé étrangère sur invites
+    )->orderByDesc('order')->limit(1);
+}
 }

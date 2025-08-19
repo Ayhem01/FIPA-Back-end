@@ -19,7 +19,7 @@ return new class extends Migration
             $table->unsignedInteger('nombre_visites')->default(1);
             $table->unsignedBigInteger('action_id'); // Ajoute cette ligne AVANT la contrainte
 
-            $table->date('date_contact');
+            $table->date('date_contact')->nullable();
             $table->string('raison_sociale');
             $table->string('responsable')->nullable();
             $table->string('fonction')->nullable();

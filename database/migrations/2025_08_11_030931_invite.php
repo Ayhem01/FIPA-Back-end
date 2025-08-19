@@ -29,6 +29,15 @@ return new class extends Migration
             $table->datetime('date_evenement')->nullable();
             $table->text('commentaires')->nullable();
             $table->foreignId('proprietaire_id')->constrained('users');
+
+            $table->foreignId('pays_id')->nullable()->constrained('pays')->nullOnDelete();
+    $table->foreignId('secteur_id')->nullable()->constrained('secteurs')->nullOnDelete();
+    $table->enum('potentiel', ['faible', 'moyen', 'élevé'])->default('moyen');
+    $table->string('token', 64)->nullable()->unique(); // Important pour la confirmation
+    $table->datetime('date_rappel')->nullable();
+    $table->datetime('date_conversion')->nullable();
+    $table->foreignId('pipeline_type_id')->nullable();
+    $table->foreignId('pipeline_stage_id')->nullable();
             $table->timestamps();
             $table->softDeletes();
         });

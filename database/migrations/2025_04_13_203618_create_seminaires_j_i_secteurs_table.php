@@ -3,70 +3,50 @@
 use Illuminate\Database\Migrations\Migration;
 use Illuminate\Database\Schema\Blueprint;
 use Illuminate\Support\Facades\Schema;
-use Illuminate\Support\Facades\DB;
 
 return new class extends Migration
 {
-    /**
-     * Run the migrations.
-     */
     public function up(): void
     {
-           // Vérifier si la table existe
-           $tableName = 'seminaires_j_i_secteurs';
-        
-        // Correction pour inclure
-        DB::statement('ALTER TABLE seminaires_j_i_secteurs MODIFY inclure VARCHAR(30)');
-        DB::statement("UPDATE seminaires_j_i_secteurs SET inclure = 'comptabilisée' WHERE inclure = ' comptabilisée'");
-        DB::statement("ALTER TABLE seminaires_j_i_secteurs MODIFY inclure ENUM('comptabilisée', 'non comptabilisée') DEFAULT 'comptabilisée'");
-        
-        // Correction pour action_conjointe
-        DB::statement('ALTER TABLE seminaires_j_i_secteurs MODIFY action_conjointe VARCHAR(30)');
-        DB::statement("UPDATE seminaires_j_i_secteurs SET action_conjointe = 'conjointe' WHERE action_conjointe = ' conjointe'");
-        DB::statement("UPDATE seminaires_j_i_secteurs SET action_conjointe = 'non conjointe' WHERE action_conjointe = ' non conjointe'");
-        DB::statement("ALTER TABLE seminaires_j_i_secteurs MODIFY action_conjointe ENUM('conjointe', 'non conjointe') NULL");
-        
-        // Correction pour type_participation - normaliser les valeurs
-        DB::statement('ALTER TABLE seminaires_j_i_secteurs MODIFY type_participation VARCHAR(50)');
-        DB::statement("UPDATE seminaires_j_i_secteurs SET type_participation = 'organisatrice' WHERE type_participation = ' organisatrice'");
-        DB::statement("UPDATE seminaires_j_i_secteurs SET type_participation = 'co-organisateur' WHERE type_participation = 'Co-organisateur'");
-        DB::statement("UPDATE seminaires_j_i_secteurs SET type_participation = 'participation active' WHERE type_participation = 'Participation active'");
-        DB::statement("UPDATE seminaires_j_i_secteurs SET type_participation = 'simple présence' WHERE type_participation = ' simple présence'");
-        DB::statement("ALTER TABLE seminaires_j_i_secteurs MODIFY type_participation ENUM('organisatrice', 'co-organisateur', 'participation active', 'simple présence') NULL");
-        
-        // Correction pour type_organisation - retirer la virgule finale et normaliser
-        DB::statement('ALTER TABLE seminaires_j_i_secteurs MODIFY type_organisation VARCHAR(50)');
-        DB::statement("UPDATE seminaires_j_i_secteurs SET type_organisation = 'partenaires étrangers' WHERE type_organisation = ' partenaires étrangers'");
-        DB::statement("UPDATE seminaires_j_i_secteurs SET type_organisation = 'partenaires tunisiens' WHERE type_organisation = ' partenaires tunisiens'");
-        DB::statement("UPDATE seminaires_j_i_secteurs SET type_organisation = 'les deux à la fois' WHERE type_organisation = ' les deux à la fois'");
-        DB::statement("ALTER TABLE seminaires_j_i_secteurs MODIFY type_organisation ENUM('partenaires étrangers', 'partenaires tunisiens', 'les deux à la fois') NULL");
-        
-        // Correction pour avec_diaspora - supprimer les espaces inutiles
-        DB::statement('ALTER TABLE seminaires_j_i_secteurs MODIFY avec_diaspora VARCHAR(50)');
-        DB::statement("UPDATE seminaires_j_i_secteurs SET avec_diaspora = 'organisée pour la diaspora' WHERE avec_diaspora = ' organisée pour la diaspora'");
-        DB::statement("UPDATE seminaires_j_i_secteurs SET avec_diaspora = 'organisée avec la diaspora' WHERE avec_diaspora = ' organisée avec la diaspora '");
-        DB::statement("ALTER TABLE seminaires_j_i_secteurs MODIFY avec_diaspora ENUM('organisée pour la diaspora', 'organisée avec la diaspora') NULL");
+        Schema::create('seminaires_j_i_secteurs', function (Blueprint $table) {
+            $table->id();
+            $table->unsignedBigInteger('secteur_id');
+            $table->unsignedBigInteger('binome_id');
+            $table->unsignedBigInteger('pays_id');
+            $table->unsignedBigInteger('responsable_fipa_id');
+            $table->unsignedBigInteger('groupe_id');
+            $table->string('intitule');
+            $table->date('date_debut');
+            $table->date('date_fin')->nullable();
+            $table->text('outils_promotionnels')->nullable();
+            $table->date('date_butoir')->nullable();
+            $table->decimal('budget_prevu', 15, 2)->nullable();
+            $table->decimal('budget_realise', 15, 2)->nullable();
+            $table->integer('nb_entreprises')->nullable();
+            $table->integer('nb_multiplicateurs')->nullable();
+            $table->integer('nb_institutionnels')->nullable();
+            $table->integer('nb_articles_presse')->nullable();
+            $table->string('fichier_presence')->nullable();
+            $table->text('evaluation_recommandations')->nullable();
+            $table->integer('contacts_realises')->nullable();
+            $table->enum('inclure', ['comptabilisée', 'non comptabilisée'])->nullable();
+            $table->enum('action_conjointe', ['conjointe', 'non conjointe'])->nullable();
+            $table->enum('type_participation', ['organisatrice', 'Co-organisateur', 'Participation active', 'simple présence'])->nullable();
+            $table->enum('type_organisation', ['partenaires étrangers', 'partenaires tunisiens', 'les deux à la fois'])->nullable();
+            $table->enum('avec_diaspora', ['organisée pour la diaspora', 'organisée avec la diaspora'])->nullable();
+            $table->timestamps();
+            
+            // Clés étrangères
+            $table->foreign('secteur_id')->references('id')->on('secteurs')->onDelete('cascade');
+            $table->foreign('binome_id')->references('id')->on('binomes')->onDelete('cascade');
+            $table->foreign('pays_id')->references('id')->on('pays')->onDelete('cascade');
+            $table->foreign('responsable_fipa_id')->references('id')->on('responsable_fipa')->onDelete('cascade');
+            $table->foreign('groupe_id')->references('id')->on('groupes')->onDelete('cascade');
+        });
     }
 
-    /**
-     * Reverse the migrations.
-     */
     public function down(): void
     {
-        // Si besoin de revenir en arrière, on restaure les définitions originales
-        DB::statement('ALTER TABLE seminaires_j_i_secteurs MODIFY inclure VARCHAR(30)');
-        DB::statement("ALTER TABLE seminaires_j_i_secteurs MODIFY inclure ENUM('comptabilisée', 'non comptabilisée') DEFAULT 'comptabilisée'");
-        
-        DB::statement('ALTER TABLE seminaires_j_i_secteurs MODIFY action_conjointe VARCHAR(30)');
-        DB::statement("ALTER TABLE seminaires_j_i_secteurs MODIFY action_conjointe ENUM('conjointe', 'non conjointe') NULL");
-        
-        DB::statement('ALTER TABLE seminaires_j_i_secteurs MODIFY type_participation VARCHAR(50)');
-        DB::statement("ALTER TABLE seminaires_j_i_secteurs MODIFY type_participation ENUM('organisatrice', 'Co-organisateur', 'Participation active', 'simple présence') NULL");
-        
-        DB::statement('ALTER TABLE seminaires_j_i_secteurs MODIFY type_organisation VARCHAR(50)');
-        DB::statement("ALTER TABLE seminaires_j_i_secteurs MODIFY type_organisation ENUM('partenaires étrangers', 'partenaires tunisiens', 'les deux à la fois') NULL");
-        
-        DB::statement('ALTER TABLE seminaires_j_i_secteurs MODIFY avec_diaspora VARCHAR(50)');
-        DB::statement("ALTER TABLE seminaires_j_i_secteurs MODIFY avec_diaspora ENUM('organisée pour la diaspora', ' organisée avec la diaspora ') NULL");
+        Schema::dropIfExists('seminaires_j_i_secteurs');
     }
 };

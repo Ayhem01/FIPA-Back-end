@@ -29,9 +29,7 @@ return new class extends Migration
             $table->string('statut')->default('prospect'); // actif, inactif, prospect, client
             $table->string('type')->nullable(); // entreprise, organisme public, association
             $table->foreignId('proprietaire_id')->nullable()->constrained('users')->nullOnDelete();
-            $table->foreignId('pipeline_stage_id')->nullable()->constrained('pipeline_stages')->nullOnDelete();
-            $table->foreignId('pipeline_type_id')->nullable()->constrained('project_pipeline_types')->nullOnDelete();
-            $table->timestamps();
+             $table->timestamps();
             $table->softDeletes();
         });
     }

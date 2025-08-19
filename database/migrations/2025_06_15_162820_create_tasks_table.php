@@ -24,6 +24,9 @@ return new class extends Migration
             // Relations
             $table->foreignId('user_id')->constrained('users')->onDelete('cascade'); // Créateur
             $table->foreignId('assignee_id')->nullable()->constrained('users')->onDelete('set null'); // Assigné à
+
+            $table->boolean('reminder_24h_sent')->default(false);
+            $table->boolean('reminder_10min_sent')->default(false);
         
             
             $table->timestamps();
