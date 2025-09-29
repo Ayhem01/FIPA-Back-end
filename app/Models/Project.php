@@ -17,17 +17,20 @@ class Project extends Model
      *
      * @var array
      */
+    protected $table = 'projets';
+
     protected $fillable = [
         'title', 'description', 'company_name', 
         'idea', 'in_progress', 'in_production',
-        'secteur_id', 'governorate_id', 'responsable_id',
+        'secteur_id', 'responsable_id',
         'market_target', 'nationality', 'foreign_percentage',
         'investment_amount', 'jobs_expected', 'industrial_zone',
-        'pipeline_type_id', 'pipeline_stage_id', 'is_blocked', 
+        'pipeline_stage_id', 'is_blocked', 
+        'pipeline_completed_at', 'pipeline_completed_by',
         'start_date', 'end_date',
         'contact_source', 'initial_contact_person', 'first_contact_date',
         'investisseur_id', 'status', 'created_by', 'notes',
-        'converted_from_investisseur_at'
+        'converted_from_investisseur_at','region_id'
     ];
 
     /**
@@ -46,6 +49,8 @@ class Project extends Model
         'end_date' => 'date',
         'first_contact_date' => 'date',
         'converted_from_investisseur_at' => 'datetime',
+        'pipeline_completed_at' => 'datetime', 
+
     ];
 
     /**
@@ -73,6 +78,10 @@ class Project extends Model
     {
         return $this->belongsTo(Secteur::class);
     }
+    public function region()
+    {
+        return $this->belongsTo(Region::class, 'region_id');
+    }
     
     /**
      * Le responsable du projet
@@ -89,14 +98,14 @@ class Project extends Model
     {
         return $this->belongsTo(User::class, 'created_by');
     }
-
+    public function blockages()
+{
+    return $this->morphMany(Blockage::class, 'blockable');
+}
     /**
      * Le type de pipeline utilisé par ce projet
      */
-    public function pipelineType(): BelongsTo
-    {
-        return $this->belongsTo(ProjectPipelineType::class, 'pipeline_type_id');
-    }
+   
     
     /**
      * L'étape actuelle du pipeline (relation directe)
@@ -112,6 +121,46 @@ class Project extends Model
     public function pipelineProgressions(): HasMany
     {
         return $this->hasMany(ProjectPipelineProgression::class, 'projet_id');
+    }
+
+    public function currentStage()
+    {
+        return $this->pipelineStage;
+    }
+
+    public function initializePipeline($userId = null): bool
+    {
+        // Si le pipeline est déjà initialisé, ne rien faire
+        if ($this->pipeline_stage_id) {
+            return true;
+        }
+        
+        // Obtenir la première étape active
+        $firstStage = ProjectPipelineStage::where('is_active', true)
+            ->orderBy('order')
+            ->first();
+        
+        if (!$firstStage) {
+            \Log::error("Aucune étape de pipeline active trouvée pour les projets");
+            return false;
+        }
+        
+        // Créer la progression
+        $this->pipelineProgressions()->create([
+            'stage_id' => $firstStage->id,
+            'completed' => false,
+            'assigned_to' => $userId ?? $this->responsable_id ?? auth()->id(),
+            'notes' => 'Étape initiale créée automatiquement'
+        ]);
+        
+        // Mettre à jour l'étape directe
+        $this->update(['pipeline_stage_id' => $firstStage->id]);
+        
+        \Log::info("Pipeline initialisé avec succès pour projet #{$this->id}", [
+            'stage_name' => $firstStage->name
+        ]);
+        
+        return true;
     }
 
     /**
@@ -136,79 +185,75 @@ class Project extends Model
      */
     public function advanceToNextStage($userId = null, $notes = null): bool
     {
-        $currentStage = $this->currentStage;
+        $currentStage = $this->pipelineStage;
         
         if (!$currentStage) {
-            // Obtenir la première étape du pipeline par défaut
-            $pipelineType = $this->pipeline_type_id ? 
-                ProjectPipelineType::find($this->pipeline_type_id) : 
-                ProjectPipelineType::getDefault();
-            
-            if (!$pipelineType) {
-                return false;
-            }
-            
-            $firstStage = $pipelineType->stages()->orderBy('order')->first();
-            
-            if (!$firstStage) {
-                return false;
-            }
-            
-            // Créer la première progression
-            ProjectPipelineProgression::create([
-                'projet_id' => $this->id,
-                'stage_id' => $firstStage->id,
-                'completed' => false,
-                'assigned_to' => $userId ?? $this->responsable_id
-            ]);
-            
-            // Mettre à jour l'étape directe
-            $this->update(['pipeline_stage_id' => $firstStage->id]);
-            
-            return true;
+            return $this->initializePipeline($userId);
         }
         
-        // Trouver la progression actuelle
-        $currentProgression = $this->pipelineProgressions()
-                                   ->where('stage_id', $currentStage->id)
-                                   ->where('completed', false)
-                                   ->first();
-        
-        if ($currentProgression) {
-            // Marquer comme complété
-            $currentProgression->update([
-                'completed' => true,
-                'completed_at' => now(),
-                'notes' => $notes ?: $currentProgression->notes
+        try {
+            return \DB::transaction(function () use ($currentStage, $userId, $notes) {
+                // Marquer l'étape actuelle comme complétée
+                $currentProgression = $this->pipelineProgressions()
+                    ->where('stage_id', $currentStage->id)
+                    ->where('completed', false)
+                    ->first();
+                
+                if ($currentProgression) {
+                    $currentProgression->update([
+                        'completed' => true,
+                        'completed_at' => now(),
+                        'notes' => $notes ?: $currentProgression->notes
+                    ]);
+                }
+                
+                // Si c'est l'étape finale, marquer le projet comme complété
+                if ($currentStage->is_final) {
+                    $this->update([
+                        'status' => self::STATUS_COMPLETED,
+                        'pipeline_completed_at' => now(),
+                        'pipeline_completed_by' => $userId ?? auth()->id()
+                    ]);
+                    
+                    \Log::info("Étape finale atteinte pour le projet #{$this->id}");
+                    return true;
+                }
+                
+                // Trouver l'étape suivante
+                $nextStage = ProjectPipelineStage::where('is_active', true)
+                    ->where('order', '>', $currentStage->order)
+                    ->orderBy('order')
+                    ->first();
+                
+                if (!$nextStage) {
+                    \Log::warning("Aucune étape suivante trouvée pour le projet #{$this->id}");
+                    return false;
+                }
+                
+                // Créer la progression pour l'étape suivante
+                $this->pipelineProgressions()->firstOrCreate(
+                    [
+                        'stage_id' => $nextStage->id
+                    ],
+                    [
+                        'completed' => false,
+                        'assigned_to' => $userId ?? $this->responsable_id ?? auth()->id()
+                    ]
+                );
+                
+                // Mettre à jour l'étape actuelle
+                $this->update(['pipeline_stage_id' => $nextStage->id]);
+                
+                \Log::info("Projet #{$this->id} avancé à l'étape suivante: {$nextStage->name}");
+                return true;
+            });
+        } catch (\Exception $e) {
+            \Log::error("Erreur lors de l'avancement du projet: " . $e->getMessage(), [
+                'project_id' => $this->id,
+                'trace' => $e->getTraceAsString()
             ]);
-        }
-        
-        // Trouver l'étape suivante
-        $nextStage = ProjectPipelineStage::where('pipeline_type_id', $currentStage->pipeline_type_id)
-                                         ->where('order', '>', $currentStage->order)
-                                         ->orderBy('order')
-                                         ->first();
-        
-        if (!$nextStage) {
-            // Si c'est la dernière étape, on considère le projet comme terminé
-            if ($currentStage->is_final) {
-                $this->update(['status' => self::STATUS_COMPLETED]);
-            }
             return false;
         }
-        
-        // Créer la progression pour l'étape suivante
-        ProjectPipelineProgression::create([
-            'projet_id' => $this->id,
-            'stage_id' => $nextStage->id,
-            'completed' => false,
-            'assigned_to' => $userId ?? $this->responsable_id
-        ]);
-        
-        // Mettre à jour l'étape directe
-        $this->update(['pipeline_stage_id' => $nextStage->id]);
-        
-        return true;
     }
 
     /**
@@ -216,33 +261,80 @@ class Project extends Model
      */
     public function setStage($stageId, $userId = null, $notes = null): bool
     {
-        $stage = ProjectPipelineStage::find($stageId);
-        
-        if (!$stage) {
+        try {
+            $stage = ProjectPipelineStage::findOrFail($stageId);
+            
+            return \DB::transaction(function() use ($stage, $userId, $notes) {
+                // Marquer toutes les progressions actuelles comme complétées
+                $this->pipelineProgressions()
+                    ->where('completed', false)
+                    ->update(['completed' => true, 'completed_at' => now()]);
+                
+                // Créer la nouvelle progression
+                $this->pipelineProgressions()->create([
+                    'stage_id' => $stage->id,
+                    'completed' => false,
+                    'assigned_to' => $userId ?? $this->responsable_id ?? auth()->id(),
+                    'notes' => $notes
+                ]);
+                
+                // Mettre à jour l'étape directe
+                $this->update(['pipeline_stage_id' => $stage->id]);
+                
+                // Si c'est l'étape finale, marquer comme complété
+                if ($stage->is_final) {
+                    $this->update([
+                        'status' => self::STATUS_COMPLETED,
+                        'pipeline_completed_at' => now(),
+                        'pipeline_completed_by' => $userId ?? auth()->id()
+                    ]);
+                }
+                
+                return true;
+            });
+        } catch (\Exception $e) {
+            \Log::error("Erreur lors de la définition de l'étape du projet: " . $e->getMessage(), [
+                'project_id' => $this->id,
+                'stage_id' => $stageId,
+                'trace' => $e->getTraceAsString()
+            ]);
             return false;
         }
+    }
+
+    public function progressionPercentage(): int
+    {
+        // Si le pipeline est marqué comme terminé, retourner 100%
+        if ($this->pipeline_completed_at) {
+            return 100;
+        }
         
-        // Marquer toutes les progressions actuelles comme complétées
-        $this->pipelineProgressions()
-             ->where('completed', false)
-             ->update(['completed' => true, 'completed_at' => now()]);
+        // Si le projet est terminé, retourner 100%
+        if ($this->status === self::STATUS_COMPLETED) {
+            return 100;
+        }
         
-        // Créer la nouvelle progression
-        ProjectPipelineProgression::create([
-            'projet_id' => $this->id,
-            'stage_id' => $stageId,
-            'completed' => false,
-            'assigned_to' => $userId ?? $this->responsable_id,
-            'notes' => $notes
-        ]);
+        // Si le projet est abandonné, retourner 0%
+        if ($this->status === self::STATUS_ABANDONED) {
+            return 0;
+        }
         
-        // Mettre à jour l'étape directe
-        $this->update([
-            'pipeline_stage_id' => $stageId,
-            'pipeline_type_id' => $stage->pipeline_type_id
-        ]);
+        $totalStages = ProjectPipelineStage::where('is_active', true)->count();
         
-        return true;
+        if ($totalStages === 0) {
+            return 0;
+        }
+        
+        $completedStages = $this->pipelineProgressions()
+            ->where('completed', true)
+            ->count();
+        
+        return (int) round(($completedStages / $totalStages) * 100);
+    }
+
+    public function isPipelineCompleted(): bool
+    {
+        return !is_null($this->pipeline_completed_at);
     }
 
     /**
@@ -260,44 +352,124 @@ class Project extends Model
     /**
      * Calculer le pourcentage d'avancement du projet
      */
-    public function getProgressPercentageAttribute(): int
+    // public function getProgressPercentageAttribute(): int
+    // {
+    //     // Si le projet est terminé, retourner 100%
+    //     if ($this->status === self::STATUS_COMPLETED) {
+    //         return 100;
+    //     }
+        
+    //     // Si le projet est abandonné, pas de progrès
+    //     if ($this->status === self::STATUS_ABANDONED) {
+    //         return 0;
+    //     }
+        
+    //     // Calculer en fonction des progressions dans le pipeline
+    //     $currentStage = $this->currentStage;
+        
+    //     if (!$currentStage) {
+    //         return 0;
+    //     }
+        
+    //     $pipelineType = ProjectPipelineType::find($this->pipeline_type_id);
+        
+    //     if (!$pipelineType) {
+    //         return 0;
+    //     }
+        
+    //     $totalStages = $pipelineType->stages()->count();
+        
+    //     if ($totalStages === 0) {
+    //         return 0;
+    //     }
+        
+    //     // Les étapes complétées + l'étape actuelle avec une pondération
+    //     $completedStages = $this->pipelineProgressions()
+    //                            ->where('completed', true)
+    //                            ->count();
+        
+    //     return min(100, (int)round(($completedStages / $totalStages) * 100));
+    // }
+
+    public function canAdvanceToNextStage()
     {
-        // Si le projet est terminé, retourner 100%
-        if ($this->status === self::STATUS_COMPLETED) {
-            return 100;
+        if (!$this->pipeline_stage_id) {
+            return false;
         }
-        
-        // Si le projet est abandonné, pas de progrès
-        if ($this->status === self::STATUS_ABANDONED) {
-            return 0;
+
+        $currentStage = $this->pipelineStage;
+        if ($currentStage && $currentStage->is_final) {
+            return false;
         }
-        
-        // Calculer en fonction des progressions dans le pipeline
-        $currentStage = $this->currentStage;
-        
-        if (!$currentStage) {
-            return 0;
-        }
-        
-        $pipelineType = ProjectPipelineType::find($this->pipeline_type_id);
-        
-        if (!$pipelineType) {
-            return 0;
-        }
-        
-        $totalStages = $pipelineType->stages()->count();
-        
-        if ($totalStages === 0) {
-            return 0;
-        }
-        
-        // Les étapes complétées + l'étape actuelle avec une pondération
-        $completedStages = $this->pipelineProgressions()
-                               ->where('completed', true)
-                               ->count();
-        
-        return min(100, (int)round(($completedStages / $totalStages) * 100));
+
+        return true;
     }
+    public function getNextStage()
+    {
+        if (!$this->pipeline_stage_id) {
+            return null;
+        }
+
+        $currentStage = $this->pipelineStage;
+        if (!$currentStage) {
+            return null;
+        }
+
+        return ProjectPipelineStage::where('is_active', true)
+            ->where('order', '>', $currentStage->order)
+            ->orderBy('order', 'asc')
+            ->first();
+    }
+
+    public function getPreviousStage()
+{
+    if (!$this->pipeline_stage_id) {
+        return null;
+    }
+
+    $currentStage = $this->pipelineStage;
+    if (!$currentStage) {
+        return null;
+    }
+
+    return ProjectPipelineStage::where('is_active', true)
+        ->where('order', '<', $currentStage->order)
+        ->orderBy('order', 'desc')
+        ->first();
+}
+
+    
+
+    public function getPipelineStatusDetails()
+    {
+        if (!$this->pipeline_stage_id) {
+            return null;
+        }
+
+        $currentStage = $this->pipelineStage;
+        $allStages = ProjectPipelineStage::where('is_active', true)
+            ->orderBy('order')
+            ->get();
+        
+        $completedStages = $this->pipelineProgressions()
+            ->where('completed', true)
+            ->count();
+        
+        $totalStages = $allStages->count();
+        $progressionPercentage = $totalStages > 0 ? round(($completedStages / $totalStages) * 100) : 0;
+        
+        return [
+            'current_stage' => $currentStage,
+            'completed_stages' => $completedStages,
+            'total_stages' => $totalStages,
+            'progression_percentage' => $progressionPercentage,
+            'is_final_stage' => $currentStage ? $currentStage->is_final : false,
+            'can_advance' => $this->canAdvanceToNextStage(),
+            'next_stage' => $this->getNextStage(),
+            'previous_stage' => $this->getPreviousStage(),
+        ];
+    }
+
 
     /**
      * Obtenir l'historique des étapes du projet
@@ -363,6 +535,7 @@ class Project extends Model
         return $path;
     }
 
+
     /**
      * Créer un projet à partir d'un investisseur
      */
@@ -390,13 +563,14 @@ class Project extends Model
             // Mettre à jour l'investisseur
             $investisseur->update([
                 'statut' => 'investi',
-                'project_id' => $project->id
+                'project_id' => $project->id,
+                'converted_to_project_at' => now()  // Assurez-vous que cette colonne existe
             ]);
             
             // Initialiser le pipeline du projet
             $project->initializePipeline($userId);
             
-            // Créer l'enregistrement de conversion
+            // Créer l'enregistrement de conversion si la classe existe
             if (class_exists('App\Models\PipelineConversion')) {
                 \App\Models\PipelineConversion::create([
                     'source_type' => 'investisseur',
@@ -414,45 +588,63 @@ class Project extends Model
             return null;
         }
     }
-    
+
     /**
-     * Initialiser le pipeline pour ce projet
+     * Finalize the pipeline progression and mark the project as completed.
      */
-    public function initializePipeline($userId = null): bool
+    public function finalizePipelineProgression(): bool
     {
-        // Si le pipeline est déjà initialisé, ne rien faire
-        if ($this->pipeline_type_id && $this->pipeline_stage_id) {
-            return true;
-        }
-        
-        // Sélectionner le type de pipeline par défaut
-        $pipelineType = ProjectPipelineType::getDefault();
-        
-        if (!$pipelineType) {
+        $currentStage = $this->pipelineStage;
+
+        // Check if the current stage is the final stage
+        if (!$currentStage || !$currentStage->is_final) {
+            \Log::warning("Cannot finalize pipeline: Project is not in the final stage.", [
+                'project_id' => $this->id,
+                'current_stage' => $currentStage?->name
+            ]);
             return false;
         }
-        
-        // Définir le type de pipeline
-        $this->update(['pipeline_type_id' => $pipelineType->id]);
-        
-        // Obtenir la première étape
-        $firstStage = $pipelineType->stages()->orderBy('order')->first();
-        
-        if (!$firstStage) {
+
+        try {
+            return \DB::transaction(function () use ($currentStage) {
+                // Mark all stages as completed
+                $this->pipelineProgressions()
+                    ->where('completed', false)
+                    ->update(['completed' => true, 'completed_at' => now()]);
+
+                // Mark the current stage as completed
+                $currentProgression = $this->pipelineProgressions()
+                    ->where('stage_id', $currentStage->id)
+                    ->where('completed', false)
+                    ->first();
+
+                if ($currentProgression) {
+                    $currentProgression->update([
+                        'completed' => true,
+                        'completed_at' => now()
+                    ]);
+                }
+
+                // Mark the project as completed
+                $this->update([
+                    'status' => self::STATUS_COMPLETED,
+                    'pipeline_completed_at' => now(),
+                    'pipeline_completed_by' => auth()->id()
+                ]);
+
+                \Log::info("Pipeline finalized for project #{$this->id}", [
+                    'project_id' => $this->id,
+                    'final_stage' => $currentStage->name
+                ]);
+
+                return true;
+            });
+        } catch (\Exception $e) {
+            \Log::error("Error finalizing pipeline for project #{$this->id}: " . $e->getMessage(), [
+                'project_id' => $this->id,
+                'trace' => $e->getTraceAsString()
+            ]);
             return false;
         }
-        
-        // Créer la progression
-        ProjectPipelineProgression::create([
-            'projet_id' => $this->id,
-            'stage_id' => $firstStage->id,
-            'completed' => false,
-            'assigned_to' => $userId ?? $this->responsable_id
-        ]);
-        
-        // Mettre à jour l'étape directe
-        $this->update(['pipeline_stage_id' => $firstStage->id]);
-        
-        return true;
     }
 }

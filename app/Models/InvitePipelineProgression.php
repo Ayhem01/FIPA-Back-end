@@ -18,7 +18,8 @@ class InvitePipelineProgression extends Model
         'completed',
         'completed_at',
         'notes',
-        'assigned_to'
+        'assigned_to',
+        'user_id'
     ];
 
     /**
@@ -37,6 +38,11 @@ class InvitePipelineProgression extends Model
     public function invite(): BelongsTo
     {
         return $this->belongsTo(Invite::class);
+    }
+
+    public function user()
+    {
+        return $this->belongsTo(User::class);
     }
 
     /**
@@ -98,20 +104,20 @@ class InvitePipelineProgression extends Model
      * Obtenir l'étape suivante dans le pipeline
      */
     public function nextStage()
-    {
-        return InvitePipelineStage::where('pipeline_type_id', $this->stage->pipeline_type_id)
-            ->where('order', '>', $this->stage->order)
-            ->orderBy('order')
-            ->first();
-    }
+{
+    return InvitePipelineStage::where('order', '>', $this->stage->order)
+        ->where('is_active', true)
+        ->orderBy('order')
+        ->first();
+}
 
     /**
      * Obtenir l'étape précédente dans le pipeline
      */
     public function previousStage()
     {
-        return InvitePipelineStage::where('pipeline_type_id', $this->stage->pipeline_type_id)
-            ->where('order', '<', $this->stage->order)
+        return InvitePipelineStage::where('order', '<', $this->stage->order)
+            ->where('is_active', true)
             ->orderBy('order', 'desc')
             ->first();
     }
@@ -218,17 +224,16 @@ class InvitePipelineProgression extends Model
      * Calculer le score de l'invité basé sur sa progression
      */
     public function getInviteScoreAttribute(): int
-    {
-        $baseScore = 0;
-        
-        // Score basé sur l'étape actuelle
-        $stageOrder = $this->stage->order;
-        $maxOrder = InvitePipelineStage::where('pipeline_type_id', $this->stage->pipeline_type_id)
-                                       ->max('order');
-        
-        if ($maxOrder > 0) {
-            $baseScore += ($stageOrder / $maxOrder) * 50; // Maximum 50 points pour la position dans le pipeline
-        }
+{
+    $baseScore = 0;
+    
+    // Score basé sur l'étape actuelle
+    $stageOrder = $this->stage->order;
+    $maxOrder = InvitePipelineStage::max('order');
+    
+    if ($maxOrder > 0) {
+        $baseScore += ($stageOrder / $maxOrder) * 50;
+    }
         
         // Bonus si l'étape est complétée
         if ($this->completed) {

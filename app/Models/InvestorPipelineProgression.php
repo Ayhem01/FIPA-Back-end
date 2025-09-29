@@ -91,8 +91,8 @@ class InvestorPipelineProgression extends Model
      */
     public function nextStage()
     {
-        return InvestorPipelineStage::where('pipeline_type_id', $this->stage->pipeline_type_id)
-            ->where('order', '>', $this->stage->order)
+        return InvestorPipelineStage::where('order', '>', $this->stage->order)
+            ->where('is_active', true)
             ->orderBy('order')
             ->first();
     }
@@ -102,8 +102,8 @@ class InvestorPipelineProgression extends Model
      */
     public function previousStage()
     {
-        return InvestorPipelineStage::where('pipeline_type_id', $this->stage->pipeline_type_id)
-            ->where('order', '<', $this->stage->order)
+        return InvestorPipelineStage::where('order', '<', $this->stage->order)
+            ->where('is_active', true)
             ->orderBy('order', 'desc')
             ->first();
     }

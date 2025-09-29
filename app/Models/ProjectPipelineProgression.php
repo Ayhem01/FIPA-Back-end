@@ -90,23 +90,23 @@ class ProjectPipelineProgression extends Model
      * Obtenir l'étape suivante dans le pipeline
      */
     public function nextStage()
-    {
-        return ProjectPipelineStage::where('pipeline_type_id', $this->stage->pipeline_type_id)
-            ->where('order', '>', $this->stage->order)
-            ->orderBy('order')
-            ->first();
-    }
+{
+    return ProjectPipelineStage::where('order', '>', $this->stage->order)
+        ->where('is_active', true)
+        ->orderBy('order')
+        ->first();
+}
 
     /**
      * Obtenir l'étape précédente dans le pipeline
      */
     public function previousStage()
-    {
-        return ProjectPipelineStage::where('pipeline_type_id', $this->stage->pipeline_type_id)
-            ->where('order', '<', $this->stage->order)
-            ->orderBy('order', 'desc')
-            ->first();
-    }
+{
+    return ProjectPipelineStage::where('order', '<', $this->stage->order)
+        ->where('is_active', true)
+        ->orderBy('order', 'desc')
+        ->first();
+}
 
     /**
      * Créer la prochaine progression dans le pipeline

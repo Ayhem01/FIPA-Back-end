@@ -14,7 +14,6 @@ class InvitePipelineStage extends Model
      * @var array
      */
     protected $fillable = [
-        'pipeline_type_id',
         'name',
         'slug',
         'description',
@@ -24,7 +23,7 @@ class InvitePipelineStage extends Model
         'status',
         'is_active',
         'conversion_eligible',
-        'created_by'
+        
     ];
 
     /**
@@ -39,13 +38,7 @@ class InvitePipelineStage extends Model
         'order' => 'integer'
     ];
 
-    /**
-     * Le type de pipeline auquel cette étape appartient
-     */
-    public function pipelineType(): BelongsTo
-    {
-        return $this->belongsTo(InvitePipelineType::class, 'pipeline_type_id');
-    }
+   
 
     /**
      * L'utilisateur qui a créé cette étape
@@ -62,7 +55,10 @@ class InvitePipelineStage extends Model
     {
         return $this->hasMany(InvitePipelineProgression::class, 'stage_id');
     }
-
+    public function blockages()
+{
+    return $this->morphMany(Blockage::class, 'pipeline_stageable');
+}
     /**
      * Les invités actuellement à cette étape
      */
@@ -90,8 +86,7 @@ class InvitePipelineStage extends Model
      */
     public function nextStage()
     {
-        return self::where('pipeline_type_id', $this->pipeline_type_id)
-                  ->where('order', '>', $this->order)
+        return self::where('order', '>', $this->order)
                   ->where('is_active', true)
                   ->orderBy('order')
                   ->first();
@@ -102,8 +97,7 @@ class InvitePipelineStage extends Model
      */
     public function previousStage()
     {
-        return self::where('pipeline_type_id', $this->pipeline_type_id)
-                  ->where('order', '<', $this->order)
+        return self::where('order', '<', $this->order)
                   ->where('is_active', true)
                   ->orderBy('order', 'desc')
                   ->first();
@@ -114,8 +108,7 @@ class InvitePipelineStage extends Model
      */
     public function isFirstStage(): bool
     {
-        return !self::where('pipeline_type_id', $this->pipeline_type_id)
-                   ->where('order', '<', $this->order)
+        return !self::where('order', '<', $this->order)
                    ->where('is_active', true)
                    ->exists();
     }
@@ -125,10 +118,15 @@ class InvitePipelineStage extends Model
      */
     public function isLastStage(): bool
     {
-        return !self::where('pipeline_type_id', $this->pipeline_type_id)
-                   ->where('order', '>', $this->order)
+        return !self::where('order', '>', $this->order)
                    ->where('is_active', true)
                    ->exists();
+    }
+    public static function getAllStagesInOrder()
+    {
+        return self::where('is_active', true)
+                   ->orderBy('order')
+                   ->get();
     }
 
     /**

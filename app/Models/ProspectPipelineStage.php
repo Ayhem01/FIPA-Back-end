@@ -44,6 +44,16 @@ class ProspectPipelineStage extends Model
     {
         return $this->belongsTo(ProspectPipelineType::class, 'pipeline_type_id');
     }
+    public function blockages()
+{
+    return $this->morphMany(Blockage::class, 'pipeline_stageable');
+}
+public static function getAllStagesInOrder()
+{
+    return static::where('is_active', true)
+        ->orderBy('order')
+        ->get();
+}
 
     /**
      * L'utilisateur qui a créé cette étape
@@ -88,11 +98,9 @@ class ProspectPipelineStage extends Model
      */
     public function nextStage()
     {
-        return self::where('pipeline_type_id', $this->pipeline_type_id)
-                  ->where('order', '>', $this->order)
-                  ->where('is_active', true)
-                  ->orderBy('order')
-                  ->first();
+        return self::where('ordre', '>', $this->ordre)
+            ->orderBy('ordre', 'asc')
+            ->first();
     }
 
     /**

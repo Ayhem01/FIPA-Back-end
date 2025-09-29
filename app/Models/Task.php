@@ -25,6 +25,9 @@ class Task extends Model
         'assignee_id',
         'reminder_24h_sent',
         'reminder_10min_sent',
+        'entity_type',
+        'entity_id',
+        'pipeline_stage_id'
         
     ];
 
@@ -52,6 +55,24 @@ class Task extends Model
         return $this->belongsTo(User::class, 'assignee_id');
     }
 
+    public function entity()
+{
+    return $this->morphTo();
+}
+
+public function pipelineStage()
+{
+    // ✅ CORRIGER - Ajouter la condition pour 'investisseur'
+    if ($this->entity_type === 'invite') {
+        return $this->belongsTo(InvitePipelineStage::class, 'pipeline_stage_id');
+    } elseif ($this->entity_type === 'prospect') {
+        return $this->belongsTo(ProspectPipelineStage::class, 'pipeline_stage_id');
+    } elseif ($this->entity_type === 'investor' || $this->entity_type === 'investisseur') {
+        return $this->belongsTo(InvestorPipelineStage::class, 'pipeline_stage_id');
+    }
+    
+    return null;
+}
    
    
 }

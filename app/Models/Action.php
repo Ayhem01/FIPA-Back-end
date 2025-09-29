@@ -33,7 +33,7 @@ class Action extends Model
      */
     public function invites()
     {
-        return $this->hasMany(Invite::class);
+        return $this->hasMany(Invite::class, 'action_id');
     }
 
     public function etapes()

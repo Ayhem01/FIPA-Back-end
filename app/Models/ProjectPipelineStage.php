@@ -14,7 +14,6 @@ class ProjectPipelineStage extends Model
      * @var array
      */
     protected $fillable = [
-        'pipeline_type_id',
         'name',
         'slug',
         'description',
@@ -40,10 +39,11 @@ class ProjectPipelineStage extends Model
     /**
      * Le type de pipeline auquel cette étape appartient
      */
-    public function pipelineType(): BelongsTo
-    {
-        return $this->belongsTo(ProjectPipelineType::class, 'pipeline_type_id');
-    }
+  
+    public function blockages()
+{
+    return $this->morphMany(Blockage::class, 'pipeline_stageable');
+}
 
     /**
      * L'utilisateur qui a créé cette étape
@@ -71,6 +71,10 @@ class ProjectPipelineStage extends Model
                   ->where('completed', false);
         });
     }
+    public function projects(): HasMany
+    {
+        return $this->hasMany(Project::class, 'pipeline_stage_id');
+    }
 
     /**
      * Les projets qui ont complété cette étape
@@ -87,33 +91,30 @@ class ProjectPipelineStage extends Model
      * Obtenir la prochaine étape dans ce pipeline
      */
     public function nextStage()
-    {
-        return self::where('pipeline_type_id', $this->pipeline_type_id)
-                  ->where('order', '>', $this->order)
-                  ->where('is_active', true)
-                  ->orderBy('order')
-                  ->first();
-    }
+{
+    return self::where('order', '>', $this->order)
+              ->where('is_active', true)
+              ->orderBy('order')
+              ->first();
+}
 
     /**
      * Obtenir l'étape précédente dans ce pipeline
      */
     public function previousStage()
-    {
-        return self::where('pipeline_type_id', $this->pipeline_type_id)
-                  ->where('order', '<', $this->order)
-                  ->where('is_active', true)
-                  ->orderBy('order', 'desc')
-                  ->first();
-    }
+{
+    return self::where('order', '<', $this->order)
+              ->where('is_active', true)
+              ->orderBy('order', 'desc')
+              ->first();
+}
 
     /**
      * Vérifier si cette étape est la première du pipeline
      */
     public function isFirstStage(): bool
     {
-        return !self::where('pipeline_type_id', $this->pipeline_type_id)
-                   ->where('order', '<', $this->order)
+        return !self::where('order', '<', $this->order)
                    ->where('is_active', true)
                    ->exists();
     }
@@ -123,8 +124,7 @@ class ProjectPipelineStage extends Model
      */
     public function isLastStage(): bool
     {
-        return !self::where('pipeline_type_id', $this->pipeline_type_id)
-                   ->where('order', '>', $this->order)
+        return !self::where('order', '>', $this->order)
                    ->where('is_active', true)
                    ->exists();
     }

@@ -14,7 +14,6 @@ class InvestorPipelineStage extends Model
      * @var array
      */
     protected $fillable = [
-        'pipeline_type_id',
         'name',
         'slug',
         'description',
@@ -23,6 +22,7 @@ class InvestorPipelineStage extends Model
         'color',
         'status',
         'is_active',
+        'conversion_eligible',
         'created_by'
     ];
 
@@ -34,16 +34,21 @@ class InvestorPipelineStage extends Model
     protected $casts = [
         'is_final' => 'boolean',
         'is_active' => 'boolean',
+        'conversion_eligible' => 'boolean',
         'order' => 'integer'
     ];
 
     /**
      * Le type de pipeline auquel cette étape appartient
      */
-    public function pipelineType(): BelongsTo
-    {
-        return $this->belongsTo(InvestorPipelineType::class, 'pipeline_type_id');
-    }
+    // public function pipelineType(): BelongsTo
+    // {
+    //     return $this->belongsTo(InvestorPipelineType::class, 'pipeline_type_id');
+    // }
+    public function blockages()
+{
+    return $this->morphMany(Blockage::class, 'pipeline_stageable');
+}
 
     /**
      * L'utilisateur qui a créé cette étape
@@ -88,8 +93,7 @@ class InvestorPipelineStage extends Model
      */
     public function nextStage()
     {
-        return self::where('pipeline_type_id', $this->pipeline_type_id)
-                  ->where('order', '>', $this->order)
+        return self::where('order', '>', $this->order)
                   ->where('is_active', true)
                   ->orderBy('order')
                   ->first();
@@ -100,8 +104,7 @@ class InvestorPipelineStage extends Model
      */
     public function previousStage()
     {
-        return self::where('pipeline_type_id', $this->pipeline_type_id)
-                  ->where('order', '<', $this->order)
+        return self::where('order', '<', $this->order)
                   ->where('is_active', true)
                   ->orderBy('order', 'desc')
                   ->first();
@@ -112,8 +115,7 @@ class InvestorPipelineStage extends Model
      */
     public function isFirstStage(): bool
     {
-        return !self::where('pipeline_type_id', $this->pipeline_type_id)
-                   ->where('order', '<', $this->order)
+        return !self::where('order', '<', $this->order)
                    ->where('is_active', true)
                    ->exists();
     }
@@ -123,8 +125,7 @@ class InvestorPipelineStage extends Model
      */
     public function isLastStage(): bool
     {
-        return !self::where('pipeline_type_id', $this->pipeline_type_id)
-                   ->where('order', '>', $this->order)
+        return !self::where('order', '>', $this->order)
                    ->where('is_active', true)
                    ->exists();
     }
@@ -186,6 +187,12 @@ class InvestorPipelineStage extends Model
                    ->where('completed', false)
                    ->count();
     }
+    public static function getAllStagesInOrder()
+    {
+        return static::where('is_active', true)
+            ->orderBy('order')
+            ->get();
+    }
 
     /**
      * Obtenir la durée moyenne passée dans cette étape
@@ -201,7 +208,7 @@ class InvestorPipelineStage extends Model
         }
 
         $totalDays = $completedProgressions->sum(function ($progression) {
-            return $progression->created_at->diffInDays($progression->completed_at);
+            return $progression->created_at->diffInDays($progression->completed_at ?? now());
         });
 
         return round($totalDays / $completedProgressions->count(), 1);

@@ -18,6 +18,14 @@ class Kernel extends ConsoleKernel
         ->appendOutputTo(storage_path('logs/scheduler.log'));
     }
 
+    protected function scheduleEscalate(Schedule $schedule): void
+    {
+        // Exécuter la commande tous les jours à minuit
+        $schedule->command('blockages:auto-escalate')
+                 ->dailyAt('00:00')
+                 ->appendOutputTo(storage_path('logs/auto-escalate.log'));
+    }
+
     /**
      * Register the commands for the application.
      */

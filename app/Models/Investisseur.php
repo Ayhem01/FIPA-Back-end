@@ -7,6 +7,9 @@ use Illuminate\Database\Eloquent\SoftDeletes;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Database\Eloquent\Relations\HasOne;
+use Illuminate\Support\Facades\DB;
+use App\Models\InvestorPipelineStage;      // ✅ AJOUTER
+use App\Models\InvestorPipelineProgression; // ✅ AJOUTER
 
 class Investisseur extends Model
 {
@@ -17,6 +20,8 @@ class Investisseur extends Model
      *
      * @var array
      */
+    protected $table = 'investisseurs';
+
     protected $fillable = [
         'entreprise_id',
         'nom',
@@ -39,7 +44,11 @@ class Investisseur extends Model
         'date_dernier_contact',
         'prochain_contact_prevu',
         'converted_to_project_at',
-        'project_id'
+        'project_id',
+        'pipeline_stage_id',
+        'pipeline_completed_at',
+        'pipeline_completed_by'
+
     ];
 
     /**
@@ -78,6 +87,10 @@ class Investisseur extends Model
     public function pays(): BelongsTo
     {
         return $this->belongsTo(Pays::class);
+    }
+    public function blockages()
+    {
+        return $this->morphMany(Blockage::class, 'blockable');
     }
 
     /**
@@ -119,6 +132,11 @@ class Investisseur extends Model
     {
         return $this->hasMany(InvestorPipelineProgression::class, 'investisseur_id');
     }
+    public function pipelineStage(): BelongsTo
+    {
+        return $this->belongsTo(InvestorPipelineStage::class, 'pipeline_stage_id');
+    }
+
 
     /**
      * Obtenir l'étape actuelle du pipeline
@@ -127,100 +145,204 @@ class Investisseur extends Model
     {
         // Récupérer l'étape non complétée la plus ancienne
         $nonCompleted = $this->pipelineProgressions()
-                             ->where('completed', false)
-                             ->orderBy('created_at', 'asc')
-                             ->first();
-        
+            ->where('completed', false)
+            ->orderBy('created_at', 'asc')
+            ->first();
+
         if ($nonCompleted) {
             return $nonCompleted->stage;
         }
-        
+
         // Si toutes les étapes sont complétées, retourner la dernière
         return $this->pipelineProgressions()
-                    ->where('completed', true)
-                    ->orderByDesc('completed_at')
-                    ->first()?->stage;
+            ->where('completed', true)
+            ->orderByDesc('completed_at')
+            ->first()?->stage;
     }
 
     /**
      * Vérifier si l'investisseur peut être converti en projet
      */
     public function canConvertToProject(): bool
-    {
-        // Vérifier si l'investisseur est déjà converti
-        if (in_array($this->statut, ['investi', 'suspendu', 'inactif']) || $this->converted_to_project_at !== null) {
-            return false;
-        }
-        
-        // Un investisseur peut être converti s'il a complété une étape finale du pipeline
-        return $this->pipelineProgressions()
-                    ->whereHas('stage', function($q) {
-                        $q->where('is_final', true);
-                    })
-                    ->where('completed', true)
-                    ->exists();
+{
+    // Vérifier si l'investisseur est déjà converti
+    if ($this->converted_to_project_at || $this->project_id) {
+        return false;
     }
 
-    /**
-     * Avancer à l'étape suivante du pipeline
-     */
-    public function advanceToNextStage($userId, $notes = null): ?InvestorPipelineProgression
-    {
-        $currentStage = $this->currentStage();
+    // Vérifier si une étape finale du pipeline a été complétée
+    $hasFinalStageCompleted = $this->pipelineProgressions()
+        ->whereHas('stage', function ($query) {
+            $query->where('is_final', true);
+        })
+        ->where('completed', true)
+        ->exists();
+
+    return $hasFinalStageCompleted;
+}
+
+ 
+public function initializePipeline($userId = null): bool
+{
+    try {
+        // Si l'investisseur a déjà un pipeline initialisé
+        if ($this->pipeline_stage_id) {
+            \Log::info("Pipeline déjà initialisé pour l'investisseur #{$this->id}");
+            return true;
+        }
+
+        // Récupérer toutes les étapes actives du pipeline investisseur
+        $stages = InvestorPipelineStage::where('is_active', true)
+            ->orderBy('order')
+            ->get();
+
+        if ($stages->isEmpty()) {
+            \Log::error("Aucune étape de pipeline active trouvée pour les investisseurs");
+            return false;
+        }
+
+        // Utiliser une transaction pour garantir l'intégrité des données
+        return \DB::transaction(function() use ($stages, $userId) {
+            // Supprimer les progressions existantes (cas de réinitialisation)
+            $this->pipelineProgressions()->delete();
+            
+            // Créer une progression pour chaque étape
+            foreach ($stages as $stage) {
+                $this->pipelineProgressions()->create([
+                    'stage_id' => $stage->id,
+                    'completed' => false,
+                    'assigned_to' => $userId ?? $this->responsable_id ?? \Auth::id() ?? 1,
+                    'notes' => $stage->order === 1 ? 'Étape initiale créée automatiquement' : null
+                ]);
+            }
+            
+            // Définir la première étape comme étape actuelle
+            $firstStage = $stages->first();
+            $this->update(['pipeline_stage_id' => $firstStage->id]);
+            
+            \Log::info("Pipeline initialisé avec succès pour investisseur #{$this->id}", [
+                'stage_name' => $firstStage->name,
+                'stages_count' => $stages->count()
+            ]);
+            
+            return true;
+        });
+    } catch (\Exception $e) {
+        \Log::error("Erreur lors de l'initialisation du pipeline: " . $e->getMessage(), [
+            'investisseur_id' => $this->id,
+            'exception' => get_class($e),
+            'trace' => $e->getTraceAsString()
+        ]);
+        return false;
+    }
+}
+
+
+public function advanceToNextStage($userId, $notes = null): bool
+{
+    try {
+        // Récupérer l'étape actuelle
+        $currentStage = $this->pipelineStage;
         
         if (!$currentStage) {
-            // Obtenir la première étape du pipeline par défaut
-            $firstStage = InvestorPipelineStage::orderBy('order')->first();
-            if (!$firstStage) return null;
+            // Aucune étape actuelle, initialiser le pipeline
+            $firstStage = InvestorPipelineStage::where('is_active', true)
+                ->orderBy('order')
+                ->first();
+                
+            if (!$firstStage) {
+                \Log::error("Aucune étape de pipeline active trouvée");
+                return false;
+            }
             
-            return InvestorPipelineProgression::create([
+            // Créer la première progression
+            InvestorPipelineProgression::create([
                 'investisseur_id' => $this->id,
                 'stage_id' => $firstStage->id,
                 'completed' => false,
-                'assigned_to' => $userId,
-                'notes' => $notes
+                'assigned_to' => $userId
             ]);
+            
+            // Mettre à jour l'étape actuelle
+            $this->update(['pipeline_stage_id' => $firstStage->id]);
+            
+            \Log::info("Pipeline initialisé pour l'investisseur #{$this->id}");
+            return true;
         }
         
-        // Marquer l'étape actuelle comme complétée
-        $currentProgression = $this->pipelineProgressions()
-                                   ->where('stage_id', $currentStage->id)
-                                   ->first();
+        return \DB::transaction(function () use ($currentStage, $userId, $notes) {
+            // Marquer l'étape actuelle comme complétée
+            $progression = $this->pipelineProgressions()
+                ->where('stage_id', $currentStage->id)
+                ->first();
+                
+            if ($progression) {
+                $progression->update([
+                    'completed' => true,
+                    'completed_at' => now(),
+                    'notes' => $notes ?? $progression->notes
+                ]);
+            }
+            
+            // Si c'est l'étape finale, ne pas avancer mais marquer comme complété
+            if ($currentStage->is_final) {
+                $this->update([
+                    'pipeline_completed_at' => now(),
+                    'pipeline_completed_by' => $userId
+                ]);
+                \Log::info("Étape finale atteinte pour l'investisseur #{$this->id}");
+                return true;
+            }
+            
+            // Trouver l'étape suivante
+            $nextStage = InvestorPipelineStage::where('is_active', true)
+                ->where('order', '>', $currentStage->order)
+                ->orderBy('order')
+                ->first();
+                
+            if (!$nextStage) {
+                \Log::warning("Aucune étape suivante trouvée pour l'investisseur #{$this->id}");
+                return false;
+            }
+            
+            // Créer ou mettre à jour la progression pour l'étape suivante
+            $nextProgression = $this->pipelineProgressions()
+                ->where('stage_id', $nextStage->id)
+                ->first();
+                
+            if (!$nextProgression) {
+                $this->pipelineProgressions()->create([
+                    'stage_id' => $nextStage->id,
+                    'completed' => false,
+                    'assigned_to' => $userId
+                ]);
+            }
+            
+            // Mettre à jour l'étape actuelle
+            $this->update(['pipeline_stage_id' => $nextStage->id]);
+            
+            \Log::info("Investisseur #{$this->id} avancé à l'étape suivante: {$nextStage->name}");
+            return true;
+        });
         
-        if ($currentProgression && !$currentProgression->completed) {
-            $currentProgression->update([
-                'completed' => true,
-                'completed_at' => now(),
-                'notes' => $notes ?: $currentProgression->notes
-            ]);
-        }
-        
-        // Trouver l'étape suivante
-        $nextStage = InvestorPipelineStage::where('pipeline_type_id', $currentStage->pipeline_type_id)
-                                        ->where('order', '>', $currentStage->order)
-                                        ->orderBy('order')
-                                        ->first();
-        
-        if (!$nextStage) return null;
-        
-        // Créer la progression pour l'étape suivante
-        return InvestorPipelineProgression::create([
+    } catch (\Exception $e) {
+        \Log::error("Erreur lors de l'avancement de l'investisseur: " . $e->getMessage(), [
             'investisseur_id' => $this->id,
-            'stage_id' => $nextStage->id,
-            'completed' => false,
-            'assigned_to' => $userId
+            'trace' => $e->getTraceAsString()
         ]);
+        return false;
     }
+}
 
     /**
      * Convertir en projet
      */
-    public function convertToProject($userId, array $additionalData = [], $notes = null): ?Projet
+    public function convertToProject($userId, array $additionalData = [], $notes = null): ?Project
     {
         if (!$this->canConvertToProject()) {
             return null;
         }
-        
+
         // Créer le projet
         $projet = Project::create([
             'entreprise_id' => $this->entreprise_id,
@@ -238,17 +360,17 @@ class Investisseur extends Model
             'description' => $additionalData['description'] ?? null,
             'notes_internes' => $notes ?? "Converti depuis l'investisseur #" . $this->id
         ]);
-        
+
         // Mettre à jour l'investisseur
         $this->update([
             'statut' => 'investi',
             'converted_to_project_at' => now(),
             'project_id' => $projet->id
         ]);
-        
+
         // Initialiser la première étape du pipeline projet
         $firstStage = ProjectPipelineStage::orderBy('order')->first();
-        
+
         if ($firstStage) {
             ProjectPipelineProgression::create([
                 'projet_id' => $projet->id,
@@ -257,8 +379,36 @@ class Investisseur extends Model
                 'assigned_to' => $userId
             ]);
         }
-        
+
         return $projet;
+    }
+    public function getPipelineStatusDetails()
+    {
+        $currentStage = $this->currentStage();
+        $completedStages = $this->pipelineProgressions()->where('completed', true)->count();
+
+        // Fetch total stages from the pipeline type associated with the current stage
+        $totalStages = $currentStage && $currentStage->pipelineType
+            ? $currentStage->pipelineType->stages()->count()
+            : InvestorPipelineStage::where('is_active', true)->count();
+
+        $hasFinalStage = $this->pipelineProgressions()
+            ->whereHas('stage', function ($q) {
+                $q->where('is_final', true);
+            })
+            ->where('completed', true)
+            ->exists();
+
+        return [
+            'current_stage' => $currentStage?->name,
+            'completed_stages' => $completedStages,
+            'total_stages' => $totalStages,
+            'progression_percentage' => $this->progressionPercentage(),
+            'has_completed_final_stage' => $hasFinalStage,
+            'can_convert' => $this->canConvertToProject(),
+            'statut' => $this->statut,
+            'converted_at' => $this->converted_to_project_at
+        ];
     }
 
     /**
@@ -266,19 +416,22 @@ class Investisseur extends Model
      */
     public function progressionPercentage(): int
     {
-        $currentStage = $this->currentStage();
-        if (!$currentStage) return 0;
-        
-        $pipelineType = $currentStage->pipelineType;
-        $totalStages = $pipelineType->stages()->count();
-        
-        if ($totalStages === 0) return 0;
-        
+        // ✅ Si le pipeline est marqué comme terminé, retourner 100%
+        if ($this->pipeline_completed_at) {
+            return 100;
+        }
+
+        $totalStages = InvestorPipelineStage::where('is_active', true)->count();
+
+        if ($totalStages === 0) {
+            return 0;
+        }
+
         $completedStages = $this->pipelineProgressions()
-                               ->where('completed', true)
-                               ->count();
-        
-        return min(100, round(($completedStages / $totalStages) * 100));
+            ->where('completed', true)
+            ->count();
+
+        return (int) round(($completedStages / $totalStages) * 100);
     }
 
     /**
@@ -287,17 +440,17 @@ class Investisseur extends Model
     public function getStageHistory()
     {
         return $this->pipelineProgressions()
-                   ->with(['stage', 'assignedTo'])
-                   ->where('completed', true)
-                   ->orderBy('completed_at')
-                   ->get()
-                   ->map(function($progression) {
-                       return [
-                           'stage' => $progression->stage->name,
-                           'completed_at' => $progression->completed_at,
-                           'completed_by' => $progression->assignedTo->name ?? 'N/A',
-                           'notes' => $progression->notes
-                       ];
-                   });
+            ->with(['stage', 'assignedTo'])
+            ->where('completed', true)
+            ->orderBy('completed_at')
+            ->get()
+            ->map(function ($progression) {
+                return [
+                    'stage' => $progression->stage->name,
+                    'completed_at' => $progression->completed_at,
+                    'completed_by' => $progression->assignedTo->name ?? 'N/A',
+                    'notes' => $progression->notes
+                ];
+            });
     }
 }

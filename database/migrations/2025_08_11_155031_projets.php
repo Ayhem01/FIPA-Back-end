@@ -25,7 +25,7 @@ return new class extends Migration
             
             // Relations
             $table->unsignedBigInteger('secteur_id')->nullable();
-            $table->unsignedBigInteger('governorate_id')->nullable();
+            // $table->unsignedBigInteger('governorate_id')->nullable();
             $table->unsignedBigInteger('responsable_id')->nullable();
             $table->unsignedBigInteger('created_by')->nullable();
             $table->unsignedBigInteger('investisseur_id')->nullable(); // Relation avec investisseur
@@ -60,7 +60,7 @@ return new class extends Migration
 
             // Clés étrangères non-circulaires
             $table->foreign('secteur_id')->references('id')->on('secteurs')->nullOnDelete();
-            $table->foreign('governorate_id')->references('id')->on('governorates')->nullOnDelete();
+            // $table->foreign('governorate_id')->references('id')->on('governorates')->nullOnDelete();
             $table->foreign('responsable_id')->references('id')->on('users')->nullOnDelete();
             $table->foreign('created_by')->references('id')->on('users')->nullOnDelete();
             $table->foreign('pipeline_type_id')->references('id')->on('project_pipeline_types')->nullOnDelete();

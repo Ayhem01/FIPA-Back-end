@@ -32,9 +32,37 @@ class RolesAndPermissionsSeeder extends Seeder
             'edit users',
             'delete users',
         ];
+        $blockagePermissions = [
+            'view blockages',
+            'create blockages',
+            'edit blockages',
+            'resolve blockages', 
+            'escalate blockages',
+            'delete blockages',
+        ];
+        $pipelineTaskPermissions = [
+            'view pipeline tasks',
+            'create pipeline tasks',
+            'edit pipeline tasks',
+            'delete pipeline tasks',
+            'manage pipeline tasks',
+            'update pipeline task status', // Ajouté pour route updatePipelineTaskStatus
+            'move pipeline tasks between stages', // Ajouté pour route moveTaskToStage
+            'view entity pipeline tasks', // Ajouté pour route getAllPipelineTasks
+            'view stage pipeline tasks', // Ajouté pour route getPipelineTasks
+        
+
+        ];
+        $invitePermissions = [
+            'view invites',
+            'create invites',
+            'edit invites',
+            'delete invites',
+            'send invites',
+        ];
 
         // Fusionner toutes les permissions
-        $allPermissions = array_merge($taskPermissions, $userPermissions);
+        $allPermissions = array_merge($taskPermissions, $userPermissions, $blockagePermissions, $pipelineTaskPermissions, $invitePermissions);
 
         // Créer les permissions (en évitant les doublons)
         foreach ($allPermissions as $permission) {
@@ -51,6 +79,12 @@ class RolesAndPermissionsSeeder extends Seeder
             'create tasks',
             'edit tasks',
             'delete tasks',
+            'view pipeline tasks',  
+            'create pipeline tasks', 
+            'edit pipeline tasks',
+            'update pipeline task status',
+            'view entity pipeline tasks',
+            'view stage pipeline tasks',
         ];
 
         $responsableRole = Role::firstOrCreate(['name' => 'responsable fipa', 'guard_name' => $guard]);
