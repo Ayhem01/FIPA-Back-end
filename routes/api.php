@@ -212,7 +212,7 @@ Route::group(['namespace' => 'Api', 'prefix' => 'tasks'], function () {
   Route::get('/myTasks', [TaskController::class, 'getMyTasks'])->middleware('auth:api');
   Route::get('/dashboard/stats', [TaskController::class, 'getDashboardStats'])->middleware('auth:api');
   Route::post('/', [TaskController::class, 'store'])->middleware('auth:api');
-  // Route::get('/all', [TaskController::class, 'index'])->middleware('auth:api');
+  Route::get('/all', [TaskController::class, 'index'])->middleware('auth:api');
   Route::get('/show/{id}', [TaskController::class, 'show'])->middleware('auth:api');
   Route::put('/{id}', [TaskController::class, 'update'])->middleware('auth:api');
   Route::delete('/delete/{id}', [TaskController::class, 'destroy'])->middleware('auth:api');
@@ -298,6 +298,21 @@ Route::group(['namespace' => 'Api', 'prefix' => 'contacts'], function () {
 });
 
 Route::group(['namespace' => 'Api', 'prefix' => 'invites'], function () {
+  Route::get('/stats', [InviteController::class, 'stats']);
+  Route::get('/dashboard', [InviteController::class, 'dashboard']);
+  
+  // Charts individuels
+  Route::get('/charts/status', [InviteController::class, 'chartByStatus']);
+  Route::get('/charts/potentiel', [InviteController::class, 'chartByPotentiel']);
+  Route::get('/charts/evolution', [InviteController::class, 'chartEvolutionMensuelle']);
+  Route::get('/charts/pays', [InviteController::class, 'chartByPays']);
+  Route::get('/charts/secteur', [InviteController::class, 'chartBySecteur']);
+  Route::get('/charts/pipeline', [InviteController::class, 'chartPipelineProgression']);
+  Route::get('/charts/conversion', [InviteController::class, 'chartConversionRate']);
+  Route::get('/charts/type', [InviteController::class, 'chartByType']);
+  Route::get('/charts/entreprises', [InviteController::class, 'chartTopEntreprises']);
+  Route::get('/charts/heatmap', [InviteController::class, 'chartHeatmapCreation']);
+
 
   Route::get('/invites-by-country', [InviteController::class, 'invitesByCountry']);
 
@@ -327,14 +342,16 @@ Route::group(['namespace' => 'Api', 'prefix' => 'pipeline-tasks'], function () {
   Route::get('/{entityType}/{entityId}/{stageId}', [TaskController::class, 'getPipelineTasks'])->middleware('auth:api');
   Route::get('/{entityType}/{entityId}', [TaskController::class, 'getAllPipelineTasks']);
   Route::put('/{taskId}', [TaskController::class, 'updatePipelineTask']);
-  Route::patch('/{taskId}/status', [TaskController::class, 'updatePipelineTaskStatus']);
+  Route::patch('/{taskId}/status', [TaskController::class, 'updatePipelineTaskStatus'])->middleware('auth:api');
   Route::patch('/{taskId}/move/{newStageId}', [TaskController::class, 'moveTaskToStage']);
   Route::delete('/{taskId}', [TaskController::class, 'deletePipelineTask']);
   Route::get('/{taskId}', [TaskController::class, 'showPipelineTask']);
 });
 
 Route::group(['namespace' => 'Api', 'prefix' => 'blockages'], function () {
+  Route::get('/all', [BlockageController::class, 'indexadmin']); 
   Route::get('/', [BlockageController::class, 'index']);
+  Route::get('/{blockage}', [BlockageController::class, 'show']);
   Route::post('/', [BlockageController::class, 'store'])->middleware('auth:api', 'role:admin');
   Route::put('/{blockage}', [BlockageController::class, 'update']);
   Route::post('/{blockage}/resolve', [BlockageController::class, 'resolve'])->middleware('auth:api', 'role:admin');

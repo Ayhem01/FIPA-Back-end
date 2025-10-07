@@ -216,7 +216,7 @@ class InvestisseurController extends Controller
                 'devise' => 'nullable|string|max:3',
                 'interets_specifiques' => 'nullable|string',
                 'criteres_investissement' => 'nullable|string',
-                'statut' => 'nullable|in:actif,negociation,engagement,finalisation,investi,suspendu,inactif',
+                'statut' => 'nullable|in:actif,negociation,engagement,finalisation,investi,suspendu,inactif,converti',
                 'date_engagement' => 'nullable|date',
                 'date_signature' => 'nullable|date',
                 'responsable_id' => 'nullable|exists:users,id',

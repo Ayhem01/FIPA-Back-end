@@ -20,7 +20,7 @@ class Project extends Model
     protected $table = 'projets';
 
     protected $fillable = [
-        'title', 'description', 'company_name', 
+        'title', 'description', 'company_name','entreprise_id',
         'idea', 'in_progress', 'in_production',
         'secteur_id', 'responsable_id',
         'market_target', 'nationality', 'foreign_percentage',
@@ -30,7 +30,7 @@ class Project extends Model
         'start_date', 'end_date',
         'contact_source', 'initial_contact_person', 'first_contact_date',
         'investisseur_id', 'status', 'created_by', 'notes',
-        'converted_from_investisseur_at','region_id'
+        'converted_from_investisseur_at','region_id',
     ];
 
     /**
@@ -81,6 +81,10 @@ class Project extends Model
     public function region()
     {
         return $this->belongsTo(Region::class, 'region_id');
+    }
+    public function entreprise()
+    {
+        return $this->belongsTo(Entreprise::class, 'entreprise_id');
     }
     
     /**
@@ -647,4 +651,17 @@ class Project extends Model
             return false;
         }
     }
+    public function getEntrepriseAttribute()
+{
+    // Priorité à entreprise_id, sinon fallback sur company_name
+    if ($this->entreprise_id) {
+        return $this->entreprise();
+    }
+    
+    if ($this->company_name) {
+        return Entreprise::where('nom', $this->company_name)->first();
+    }
+    
+    return null;
+}
 }

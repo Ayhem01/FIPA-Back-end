@@ -31,12 +31,12 @@ class ProspectController extends Controller
                 $query->where('statut', $request->statut);
             }
 
-            if ($request->has('entreprise_id')) {
-                $query->where('entreprise_id', $request->entreprise_id);
+            if ($request->has('secteur_id')) {
+                $query->where('secteur_id', $request->secteur_id);
             }
             
-            if ($request->has('responsable_id')) {
-                $query->where('responsable_id', $request->responsable_id);
+            if ($request->has('pays_id')) {
+                $query->where('pays_id', $request->pays_id);
             }
 
             // Tri

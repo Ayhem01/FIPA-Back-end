@@ -20,6 +20,9 @@ use Illuminate\Support\Facades\DB;
 use App\Models\ProspectPipelineStage;
 use App\Models\ProspectPipelineProgression; // Ajouter aussi celle-ci
 use App\Services\PipelineTaskService; // Import the PipelineTaskService
+use Carbon\Carbon;
+
+
 
 
 
@@ -28,46 +31,42 @@ class InviteController extends Controller
     /**
      * Liste des invités avec filtres possibles
      */
-    public function index(Request $request)
-    {
-        try {
-            $query = Invite::query()->with(['entreprise', 'action', 'etape', 'proprietaire']);
+   
+public function index(Request $request)
+{
+    try {
+        $query = Invite::query()->with(['entreprise', 'action', 'etape', 'proprietaire']);
 
-            // Filtres
-            if ($request->has('entreprise_id')) {
-                $query->where('entreprise_id', $request->entreprise_id);
-            }
-
-            if ($request->has('statut')) {
-                $query->where('statut', $request->statut);
-            }
-
-            if ($request->has('type_invite')) {
-                $query->where('type_invite', $request->type_invite);
-            }
-
-            if ($request->has('date_debut') && $request->has('date_fin')) {
-                $query->whereBetween('date_evenement', [$request->date_debut, $request->date_fin]);
-            }
-
-            // Tri et pagination
-            $sortField = $request->sort_by ?? 'created_at';
-            $sortDirection = $request->sort_direction ?? 'desc';
-            $invites = $query->orderBy($sortField, $sortDirection)
-                ->paginate($request->per_page ?? 15);
-
-                $invites->getCollection()->transform(function ($invite) {
-                    return $invite->append('is_converted');
-                });
-
-            return response()->json([
-                'success' => true,
-                'data' => $invites
-            ]);
-        } catch (\Exception $e) {
-            return InviteExceptionHandler::handle($e);
+        // Filtres
+        if ($request->has('statut')) {
+            $query->where('statut', $request->statut);
         }
+        if ($request->has('potentiel')) {
+            $query->where('potentiel', $request->potentiel);
+        }
+
+        if ($request->has('action_id')) {
+            $query->where('action_id', $request->action_id);
+        }
+
+        // Tri et pagination
+        $sortField = $request->sort_by ?? 'created_at';
+        $sortDirection = $request->sort_direction ?? 'desc';
+        $invites = $query->orderBy($sortField, $sortDirection)
+            ->paginate($request->per_page ?? 15);
+
+        $invites->getCollection()->transform(function ($invite) {
+            return $invite->append('is_converted');
+        });
+
+        return response()->json([
+            'success' => true,
+            'data' => $invites
+        ]);
+    } catch (\Exception $e) {
+        return InviteExceptionHandler::handle($e);
     }
+}
 
     /**
      * Afficher un invité spécifique
@@ -990,6 +989,407 @@ public function invitesByCountry()
             'error' => $e->getMessage()
         ], 500);
     }
+}
+
+public function stats()
+{
+    try {
+        $total = Invite::count();
+        $aujourd_hui = Invite::whereDate('created_at', today())->count();
+        $cette_semaine = Invite::whereBetween('created_at', [now()->startOfWeek(), now()->endOfWeek()])->count();
+        $ce_mois = Invite::whereMonth('created_at', now()->month)->count();
+        
+        // Taux de conversion
+        $convertis = Invite::where('is_converted', true)->count();
+        $taux_conversion = $total > 0 ? round(($convertis / $total) * 100, 2) : 0;
+        
+        // Invités actifs (dans le pipeline)
+        $en_pipeline = Invite::whereNotNull('pipeline_stage_id')
+                            ->where('is_converted', false)
+                            ->count();
+        
+        // Invités nécessitant un suivi
+        $suivi_requis = Invite::where('suivi_requis', true)
+                             ->where('is_converted', false)
+                             ->count();
+        
+        return response()->json([
+            'success' => true,
+            'data' => [
+                'total' => $total,
+                'aujourd_hui' => $aujourd_hui,
+                'cette_semaine' => $cette_semaine,
+                'ce_mois' => $ce_mois,
+                'convertis' => $convertis,
+                'taux_conversion' => $taux_conversion,
+                'en_pipeline' => $en_pipeline,
+                'suivi_requis' => $suivi_requis,
+                'moyenne_par_jour' => $ce_mois > 0 ? round($ce_mois / now()->day, 1) : 0
+            ]
+        ]);
+    } catch (\Exception $e) {
+        return InviteExceptionHandler::handle($e);
+    }
+}
+
+/**
+ * Répartition des invités par statut (Pie Chart)
+ */
+public function chartByStatus()
+{
+    try {
+        $data = Invite::select('statut', DB::raw('COUNT(*) as count'))
+                     ->groupBy('statut')
+                     ->orderByDesc('count')
+                     ->get()
+                     ->map(function ($item) {
+                         return [
+                             'name' => $this->getStatusLabel($item->statut),
+                             'value' => $item->count,
+                             'code' => $item->statut
+                         ];
+                     });
+
+        return response()->json([
+            'success' => true,
+            'data' => $data,
+            'chart_type' => 'pie'
+        ]);
+    } catch (\Exception $e) {
+        return InviteExceptionHandler::handle($e);
+    }
+}
+
+/**
+ * Répartition des invités par potentiel (Donut Chart)
+ */
+public function chartByPotentiel()
+{
+    try {
+        $data = Invite::select('potentiel', DB::raw('COUNT(*) as count'))
+                     ->groupBy('potentiel')
+                     ->orderByDesc('count')
+                     ->get()
+                     ->map(function ($item) {
+                         return [
+                             'name' => ucfirst($item->potentiel ?: 'Non défini'),
+                             'value' => $item->count,
+                             'code' => $item->potentiel
+                         ];
+                     });
+
+        return response()->json([
+            'success' => true,
+            'data' => $data,
+            'chart_type' => 'donut'
+        ]);
+    } catch (\Exception $e) {
+        return InviteExceptionHandler::handle($e);
+    }
+}
+
+/**
+ * Évolution des invités par mois (Line Chart)
+ */
+public function chartEvolutionMensuelle()
+{
+    try {
+        $data = Invite::select(
+                    DB::raw('YEAR(created_at) as year'),
+                    DB::raw('MONTH(created_at) as month'),
+                    DB::raw('COUNT(*) as count')
+                )
+                ->where('created_at', '>=', now()->subMonths(11)->startOfMonth())
+                ->groupBy('year', 'month')
+                ->orderBy('year')
+                ->orderBy('month')
+                ->get()
+                ->map(function ($item) {
+                    $date = Carbon::createFromDate($item->year, $item->month, 1);
+                    return [
+                        'name' => $date->format('M Y'),
+                        'value' => $item->count,
+                        'date' => $date->format('Y-m')
+                    ];
+                });
+
+        return response()->json([
+            'success' => true,
+            'data' => $data,
+            'chart_type' => 'line'
+        ]);
+    } catch (\Exception $e) {
+        return InviteExceptionHandler::handle($e);
+    }
+}
+
+/**
+ * Répartition des invités par pays (Bar Chart)
+ */
+public function chartByPays()
+{
+    try {
+        $data = Invite::join('pays', 'invites.pays_id', '=', 'pays.id')
+                     ->select('pays.name_pays as country', DB::raw('COUNT(invites.id) as count'))
+                     ->groupBy('pays.name_pays')
+                     ->orderByDesc('count')
+                     ->limit(10) // Top 10 pays
+                     ->get()
+                     ->map(function ($item) {
+                         return [
+                             'name' => $item->country,
+                             'value' => $item->count
+                         ];
+                     });
+
+        return response()->json([
+            'success' => true,
+            'data' => $data,
+            'chart_type' => 'bar'
+        ]);
+    } catch (\Exception $e) {
+        return InviteExceptionHandler::handle($e);
+    }
+}
+
+/**
+ * Répartition des invités par secteur (Horizontal Bar Chart)
+ */
+public function chartBySecteur()
+{
+    try {
+        $data = Invite::join('secteurs', 'invites.secteur_id', '=', 'secteurs.id')
+                     ->select('secteurs.name as secteur', DB::raw('COUNT(invites.id) as count'))
+                     ->groupBy('secteurs.name')
+                     ->orderByDesc('count')
+                     ->limit(8) // Top 8 secteurs
+                     ->get()
+                     ->map(function ($item) {
+                         return [
+                             'name' => $item->secteur,
+                             'value' => $item->count
+                         ];
+                     });
+
+        return response()->json([
+            'success' => true,
+            'data' => $data,
+            'chart_type' => 'horizontal_bar'
+        ]);
+    } catch (\Exception $e) {
+        return InviteExceptionHandler::handle($e);
+    }
+}
+
+/**
+ * Progression dans le pipeline (Funnel Chart)
+ */
+public function chartPipelineProgression()
+{
+    try {
+        $data = InvitePipelineStage::leftJoin('invites', 'invite_pipeline_stages.id', '=', 'invites.pipeline_stage_id')
+                                  ->select(
+                                      'invite_pipeline_stages.name as stage_name',
+                                      'invite_pipeline_stages.order',
+                                      DB::raw('COUNT(invites.id) as count')
+                                  )
+                                  ->where('invite_pipeline_stages.is_active', true)
+                                  ->groupBy('invite_pipeline_stages.id', 'invite_pipeline_stages.name', 'invite_pipeline_stages.order')
+                                  ->orderBy('invite_pipeline_stages.order')
+                                  ->get()
+                                  ->map(function ($item) {
+                                      return [
+                                          'name' => $item->stage_name,
+                                          'value' => $item->count,
+                                          'order' => $item->order
+                                      ];
+                                  });
+
+        return response()->json([
+            'success' => true,
+            'data' => $data,
+            'chart_type' => 'funnel'
+        ]);
+    } catch (\Exception $e) {
+        return InviteExceptionHandler::handle($e);
+    }
+}
+
+/**
+ * Taux de conversion par mois (Line + Bar Chart)
+ */
+public function chartConversionRate()
+{
+    try {
+        $data = Invite::select(
+                    DB::raw('YEAR(created_at) as year'),
+                    DB::raw('MONTH(created_at) as month'),
+                    DB::raw('COUNT(*) as total'),
+                    DB::raw('SUM(CASE WHEN is_converted = 1 THEN 1 ELSE 0 END) as convertis')
+                )
+                ->where('created_at', '>=', now()->subMonths(11)->startOfMonth())
+                ->groupBy('year', 'month')
+                ->orderBy('year')
+                ->orderBy('month')
+                ->get()
+                ->map(function ($item) {
+                    $date = Carbon::createFromDate($item->year, $item->month, 1);
+                    $taux = $item->total > 0 ? round(($item->convertis / $item->total) * 100, 1) : 0;
+                    
+                    return [
+                        'name' => $date->format('M Y'),
+                        'total' => $item->total,
+                        'convertis' => $item->convertis,
+                        'taux' => $taux,
+                        'date' => $date->format('Y-m')
+                    ];
+                });
+
+        return response()->json([
+            'success' => true,
+            'data' => $data,
+            'chart_type' => 'combination'
+        ]);
+    } catch (\Exception $e) {
+        return InviteExceptionHandler::handle($e);
+    }
+}
+
+/**
+ * Répartition par type d'invité (Pie Chart)
+ */
+public function chartByType()
+{
+    try {
+        $data = Invite::select('type_invite', DB::raw('COUNT(*) as count'))
+                     ->groupBy('type_invite')
+                     ->get()
+                     ->map(function ($item) {
+                         return [
+                             'name' => $item->type_invite === 'interne' ? 'Interne' : 'Externe',
+                             'value' => $item->count,
+                             'code' => $item->type_invite
+                         ];
+                     });
+
+        return response()->json([
+            'success' => true,
+            'data' => $data,
+            'chart_type' => 'pie'
+        ]);
+    } catch (\Exception $e) {
+        return InviteExceptionHandler::handle($e);
+    }
+}
+
+/**
+ * Top 10 des entreprises avec le plus d'invités (Bar Chart)
+ */
+public function chartTopEntreprises()
+{
+    try {
+        $data = Invite::join('entreprises', 'invites.entreprise_id', '=', 'entreprises.id')
+                     ->select('entreprises.nom as entreprise', DB::raw('COUNT(invites.id) as count'))
+                     ->groupBy('entreprises.nom')
+                     ->orderByDesc('count')
+                     ->limit(10)
+                     ->get()
+                     ->map(function ($item) {
+                         return [
+                             'name' => $item->entreprise,
+                             'value' => $item->count
+                         ];
+                     });
+
+        return response()->json([
+            'success' => true,
+            'data' => $data,
+            'chart_type' => 'bar'
+        ]);
+    } catch (\Exception $e) {
+        return InviteExceptionHandler::handle($e);
+    }
+}
+
+/**
+ * Heatmap des invitations par jour de la semaine et heure
+ */
+public function chartHeatmapCreation()
+{
+    try {
+        $data = Invite::select(
+                    DB::raw('DAYOFWEEK(created_at) as day_of_week'),
+                    DB::raw('HOUR(created_at) as hour'),
+                    DB::raw('COUNT(*) as count')
+                )
+                ->groupBy('day_of_week', 'hour')
+                ->get()
+                ->map(function ($item) {
+                    $days = ['Dim', 'Lun', 'Mar', 'Mer', 'Jeu', 'Ven', 'Sam'];
+                    return [
+                        'day' => $days[$item->day_of_week - 1],
+                        'hour' => $item->hour,
+                        'value' => $item->count,
+                        'coordinates' => [$item->day_of_week - 1, $item->hour]
+                    ];
+                });
+
+        return response()->json([
+            'success' => true,
+            'data' => $data,
+            'chart_type' => 'heatmap'
+        ]);
+    } catch (\Exception $e) {
+        return InviteExceptionHandler::handle($e);
+    }
+}
+
+/**
+ * Dashboard complet avec tous les graphiques
+ */
+public function dashboard()
+{
+    try {
+        return response()->json([
+            'success' => true,
+            'data' => [
+                'stats' => $this->stats()->getData()->data,
+                'charts' => [
+                    'status' => $this->chartByStatus()->getData()->data,
+                    'potentiel' => $this->chartByPotentiel()->getData()->data,
+                    'evolution' => $this->chartEvolutionMensuelle()->getData()->data,
+                    'pays' => $this->chartByPays()->getData()->data,
+                    'secteur' => $this->chartBySecteur()->getData()->data,
+                    'pipeline' => $this->chartPipelineProgression()->getData()->data,
+                    'conversion' => $this->chartConversionRate()->getData()->data,
+                    'type' => $this->chartByType()->getData()->data,
+                    'entreprises' => $this->chartTopEntreprises()->getData()->data
+                ]
+            ]
+        ]);
+    } catch (\Exception $e) {
+        return InviteExceptionHandler::handle($e);
+    }
+}
+
+/**
+ * Méthode helper pour les labels de statut
+ */
+private function getStatusLabel($status)
+{
+    $labels = [
+        'en_attente' => 'En attente',
+        'envoyee' => 'Envoyée',
+        'confirmee' => 'Confirmée',
+        'refusee' => 'Refusée',
+        'details_envoyes' => 'Détails envoyés',
+        'participation_confirmee' => 'Participation confirmée',
+        'participation_sans_suivi' => 'Participation sans suivi',
+        'absente' => 'Absente',
+        'aucune_reponse' => 'Aucune réponse'
+    ];
+
+    return $labels[$status] ?? ucfirst($status);
 }
     
 

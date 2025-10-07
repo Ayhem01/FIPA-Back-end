@@ -51,10 +51,10 @@ class Entreprise extends Model
     /**
      * Les contacts liés à cette entreprise
      */
-    public function contacts()
-    {
-        return $this->hasMany(Contact::class);
-    }
+    // public function contacts()
+    // {
+    //     return $this->hasMany(Contact::class);
+    // }
 
     /**
      * Le secteur d'activité de l'entreprise
@@ -82,7 +82,7 @@ class Entreprise extends Model
      */
     public function projets()
     {
-        return $this->hasMany(Project::class);
+        return $this->hasMany(Project::class, 'entreprise_id');
     }
 
     /**
@@ -172,5 +172,16 @@ public function etapePlusAvancee()
         'id',           // Clé locale sur entreprises
         'pipeline_stage_id' // Clé étrangère sur invites
     )->orderByDesc('order')->limit(1);
+}
+public function tousLesProjets()
+{
+    // Projets avec entreprise_id
+    $projetsParId = $this->hasMany(Project::class, 'entreprise_id');
+    
+    // Projets avec company_name (pour transition)
+    $projetsParNom = Project::where('company_name', $this->nom)
+                           ->whereNull('entreprise_id');
+    
+    return $projetsParId->union($projetsParNom);
 }
 }

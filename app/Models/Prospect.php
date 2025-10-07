@@ -74,11 +74,11 @@ class Prospect extends Model
     }
     public function pays()
     {
-    return $this->belongsTo(Invite::class, 'pays_id');
+    return $this->belongsTo(Pays::class, 'pays_id');
     }
     public function secteur()
     {
-    return $this->belongsTo(Invite::class, 'secteur_id');
+    return $this->belongsTo(Secteur::class, 'secteur_id');
     }
     public function responsable()
     {

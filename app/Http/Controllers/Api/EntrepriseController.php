@@ -5,7 +5,7 @@ namespace App\Http\Controllers\Api;
 use App\Http\Controllers\Controller;
 use App\Models\Entreprise;
 use App\Http\Requests\EntrepriseRequest;
-use App\Exceptions\EntrepriseExceptionHandler;
+use App\Exceptions\SuivieProjet\EntrepriseExceptionHandler; // ← Changé ici
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Storage;
 
@@ -36,9 +36,9 @@ class EntrepriseController extends Controller
                 $query->where('type', $request->type);
             }
             
-            if ($request->has('pipeline_stage_id')) {
-                $query->where('pipeline_stage_id', $request->pipeline_stage_id);
-            }
+            // if ($request->has('pipeline_stage_id')) {
+            //     $query->where('pipeline_stage_id', $request->pipeline_stage_id);
+            // }
             
             if ($request->has('proprietaire_id')) {
                 $query->where('proprietaire_id', $request->proprietaire_id);
@@ -69,9 +69,9 @@ class EntrepriseController extends Controller
             $entreprise = Entreprise::with([
                 'secteur', 
                 'proprietaire', 
-                'pipelineStage', 
-                'pipelineType', 
-                'contacts',
+                // 'pipelineStage', 
+                // 'pipelineType', 
+                // 'contacts',
                 'invites' => function($q) {
                     $q->orderBy('created_at', 'desc')->take(5);
                 },
@@ -81,7 +81,7 @@ class EntrepriseController extends Controller
             ])->findOrFail($id);
             
             // Ajouter des statistiques
-            $entreprise->contacts_count = $entreprise->contacts()->count();
+            // $entreprise->contacts_count = $entreprise->contacts()->count();
             $entreprise->invites_count = $entreprise->invites()->count();
             $entreprise->projets_count = $entreprise->projets()->count();
             
@@ -192,38 +192,38 @@ class EntrepriseController extends Controller
     /**
      * Mettre à jour l'étape de pipeline d'une entreprise
      */
-    public function updatePipelineStage(Request $request, $id)
-    {
-        try {
-            $entreprise = Entreprise::findOrFail($id);
+    // public function updatePipelineStage(Request $request, $id)
+    // {
+    //     try {
+    //         $entreprise = Entreprise::findOrFail($id);
             
-            $validator = \Illuminate\Support\Facades\Validator::make($request->all(), [
-                'pipeline_stage_id' => 'required|exists:pipeline_stages,id'
-            ]);
+    //         $validator = \Illuminate\Support\Facades\Validator::make($request->all(), [
+    //             'pipeline_stage_id' => 'required|exists:pipeline_stages,id'
+    //         ]);
 
-            if ($validator->fails()) {
-                return response()->json([
-                    'success' => false,
-                    'errors' => $validator->errors()
-                ], 422);
-            }
+    //         if ($validator->fails()) {
+    //             return response()->json([
+    //                 'success' => false,
+    //                 'errors' => $validator->errors()
+    //             ], 422);
+    //         }
 
-            $entreprise->pipeline_stage_id = $request->pipeline_stage_id;
-            $entreprise->save();
+    //         $entreprise->pipeline_stage_id = $request->pipeline_stage_id;
+    //         $entreprise->save();
             
-            // Récupérer l'étape avec ses informations
-            $entreprise->load('pipelineStage');
+    //         // Récupérer l'étape avec ses informations
+    //         $entreprise->load('pipelineStage');
             
-            return response()->json([
-                'success' => true,
-                'message' => 'Étape de pipeline mise à jour',
-                'data' => $entreprise
-            ]);
+    //         return response()->json([
+    //             'success' => true,
+    //             'message' => 'Étape de pipeline mise à jour',
+    //             'data' => $entreprise
+    //         ]);
             
-        } catch (\Exception $e) {
-            return EntrepriseExceptionHandler::handle($e);
-        }
-    }
+    //     } catch (\Exception $e) {
+    //         return EntrepriseExceptionHandler::handle($e);
+    //     }
+    // }
 
     /**
      * Recherche rapide d'entreprises

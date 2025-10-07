@@ -20,7 +20,7 @@ class InviteRequest extends FormRequest
         return [
             'entreprise_id' => $isUpdate ? 'sometimes|required|exists:entreprises,id' : 'required|exists:entreprises,id',
             'action_id' => $isUpdate ? 'sometimes|required|exists:actions,id' : 'required|exists:actions,id',
-            'etape_id' => $isUpdate ? 'sometimes|required|exists:etapes,id' : 'required|exists:etapes,id',
+            // 'etape_id' => $isUpdate ? 'sometimes|required|exists:etapes,id' : 'required|exists:etapes,id',
             'nom' => $isUpdate ? 'sometimes|required|string|max:255' : 'required|string|max:255',
             'prenom' => $isUpdate ? 'sometimes|required|string|max:255' : 'required|string|max:255',
             'email' => [
