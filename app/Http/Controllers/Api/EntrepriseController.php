@@ -159,35 +159,28 @@ class EntrepriseController extends Controller
      * Supprimer une entreprise
      */
     public function destroy($id)
-    {
-        try {
-            $entreprise = Entreprise::findOrFail($id);
-            
-            // Vérifier s'il y a des projets liés actifs
-            $projetsActifs = $entreprise->projets()->whereNotIn('statut', ['terminé', 'abandonné'])->count();
-            if ($projetsActifs > 0) {
-                return response()->json([
-                    'success' => false,
-                    'message' => 'Impossible de supprimer cette entreprise car elle possède des projets actifs'
-                ], 409);
-            }
-            
-            // Supprimer le logo si existant
-            if ($entreprise->logo) {
-                Storage::disk('public')->delete($entreprise->logo);
-            }
-            
-            $entreprise->delete();
-            
-            return response()->json([
-                'success' => true,
-                'message' => 'Entreprise supprimée avec succès'
-            ]);
-            
-        } catch (\Exception $e) {
+{
+    try {
+        $entreprise = Entreprise::findOrFail($id);
+
+        // Supprimer le logo si existant
+        if ($entreprise->logo) {
+            Storage::disk('public')->delete($entreprise->logo);
+        }
+
+        // Supprimer l'entreprise directement
+        $entreprise->delete();
+
+        return response()->json([
+            'success' => true,
+            'message' => 'Entreprise supprimée avec succès.'
+        ]);
+        
+    } catch (\Exception $e) {
             return EntrepriseExceptionHandler::handle($e);
         }
-    }
+}
+
 
     /**
      * Mettre à jour l'étape de pipeline d'une entreprise

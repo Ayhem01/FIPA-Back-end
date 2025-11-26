@@ -11,87 +11,217 @@ class RolesAndPermissionsSeeder extends Seeder
 {
     public function run()
     {
-        // Reset des caches de permission
         app()[\Spatie\Permission\PermissionRegistrar::class]->forgetCachedPermissions();
+        $guard = 'api';
 
-        $guard = 'api'; // Utilisé pour tout le projet React + Laravel API
-
-        // Définir les permissions des tâches
-        $taskPermissions = [
-            'view tasks',
-            'create tasks',
-            'edit tasks',
-            'delete tasks',
-            'manage all tasks',
+        // ============== Permissions génériques CRUD helper ==============
+        $crud = fn(string $name) => [
+            "view {$name}", "create {$name}", "edit {$name}", "delete {$name}",
         ];
 
-        // Définir les permissions des utilisateurs
-        $userPermissions = [
-            'view users',
-            'create users',
-            'edit users',
-            'delete users',
+        // ============== Ressources simples (CRUD) ==============
+        $resourcesCrud = [
+            'media',
+            'responsable bureau media',
+            'vav siege media',
+            'initiateurs',
+            'pays',
+            'secteurs',
+            'cte',
+            'binomes',
+            'salons',
+            'seminaires ji pays',
+            'nationalites',
+            'responsables fipa',
+            'groupes',
+            'delegations',
+            'responsables suivi',
+            'visites entreprises',
+            'seminaires ji secteur',
+            'salon sectoriel',
+            'demarchage direct',
+            'contacts',
+            'project contacts',
         ];
-        $blockagePermissions = [
-            'view blockages',
-            'create blockages',
-            'edit blockages',
-            'resolve blockages', 
-            'escalate blockages',
-            'delete blockages',
-        ];
+
+        $simplePermissions = [];
+        foreach ($resourcesCrud as $r) {
+            $simplePermissions = array_merge($simplePermissions, $crud($r));
+        }
+
+        // ============== Entreprises ==============
+        $entreprisePermissions = array_merge($crud('entreprises'), [
+            'update entreprise pipeline stage',
+            'view entreprise search',
+            'view entreprise dashboard stats',
+        ]);
+
+        // ============== Users ==============
+        $userPermissions = array_merge($crud('users'), [
+            'assign user roles',
+            'assign user permissions',
+        ]);
+
+        // ============== Actions ==============
+        $actionPermissions = array_merge($crud('actions'), [
+            'update action status',
+            'view actions treemap',
+            'view action calendar',
+            'view actions by entreprise',
+        ]);
+
+        // ============== Etapes (d’actions) ==============
+        $etapePermissions = array_merge($crud('etapes'), [
+            'reorder etapes',
+            'view etapes by action',
+        ]);
+
+        // ============== Invites ==============
+        $invitePermissions = array_merge($crud('invites'), [
+            'send invites',
+            'update invite status',
+            'initialize invite pipeline',
+            'advance invite stage',
+            'view invite pipeline',
+            'convert invite to prospect',
+            'view invite progression',
+            'view invite stats',
+            'view invite charts',
+            'view invites by entreprise',
+        ]);
+
+        // ============== Tasks (génériques) ==============
+        $taskPermissions = array_merge($crud('tasks'), [
+            'move tasks',
+            'update task status',
+            'view calendar tasks',
+            'view dashboard task stats',
+            'view my tasks',
+        ]);
+
+        // ============== Pipeline Tasks (spécifiques) ==============
         $pipelineTaskPermissions = [
             'view pipeline tasks',
             'create pipeline tasks',
             'edit pipeline tasks',
             'delete pipeline tasks',
-            'manage pipeline tasks',
-            'update pipeline task status', // Ajouté pour route updatePipelineTaskStatus
-            'move pipeline tasks between stages', // Ajouté pour route moveTaskToStage
-            'view entity pipeline tasks', // Ajouté pour route getAllPipelineTasks
-            'view stage pipeline tasks', // Ajouté pour route getPipelineTasks
-        
-
-        ];
-        $invitePermissions = [
-            'view invites',
-            'create invites',
-            'edit invites',
-            'delete invites',
-            'send invites',
+            'update pipeline task status',
+            'move pipeline task',
+            'view pipeline entity tasks',
+            'view pipeline stage tasks',
         ];
 
-        // Fusionner toutes les permissions
-        $allPermissions = array_merge($taskPermissions, $userPermissions, $blockagePermissions, $pipelineTaskPermissions, $invitePermissions);
+        // ============== Projects ==============
+        $projectPermissions = array_merge($crud('projects'), [
+            'update project status',
+            'initialize project pipeline',
+            'advance project stage',
+            'update project pipeline stage',
+            'view project pipeline',
+            'create project from investisseur',
+            'view investisseur data for project',
+            'view project analytics',
+        ]);
 
-        // Créer les permissions (en évitant les doublons)
-        foreach ($allPermissions as $permission) {
-            Permission::firstOrCreate(['name' => $permission, 'guard_name' => $guard]);
+        // ============== Pipeline Types ==============
+        $pipelineTypePermissions = array_merge($crud('pipeline types'));
+
+        // ============== Global Pipeline Stages ==============
+        $globalPipelineStagePermissions = [
+            'view pipeline stages',
+            'view pipeline stage details',
+            'create pipeline stages',
+            'edit pipeline stages',
+            'delete pipeline stages',
+            'reorder pipeline stages',
+        ];
+
+        // ============== Stats (dashboard) ==============
+        $statsPermissions = [
+            'view stats',
+        ];
+
+        // ============== Prospects ==============
+        $prospectPermissions = array_merge($crud('prospects'), [
+            'update prospect status',
+            'initialize prospect pipeline',
+            'advance prospect stage',
+            'view prospect pipeline',
+            'convert prospect to investor',
+            'view investor data for conversion',
+            'view prospect charts',
+            'view prospect on-chain',
+            'view prospect on-chain tasks',
+            'view prospect on-chain stage tasks',
+            'view prospect on-chain progress',
+        ]);
+
+        // ============== Investisseurs ==============
+        $investisseurPermissions = array_merge($crud('investisseurs'), [
+            'update investisseur status',
+            'initialize investisseur pipeline',
+            'advance investisseur stage',
+            'view investisseur pipeline',
+            'convert investisseur to project',
+            'view investisseur charts',
+        ]);
+
+        // ============== Blockages ==============
+        $blockagePermissions = array_merge($crud('blockages'), [
+            'resolve blockages',
+            'escalate blockages',
+            'view all blockages admin',
+            'view blockages by stage',
+        ]);
+
+        // ============== Agrégation ==============
+        $allPermissions = array_values(array_unique(array_merge(
+            $simplePermissions,
+            $entreprisePermissions,
+            $userPermissions,
+            $actionPermissions,
+            $etapePermissions,
+            $invitePermissions,
+            $taskPermissions,
+            $pipelineTaskPermissions,
+            $projectPermissions,
+            $pipelineTypePermissions,
+            $globalPipelineStagePermissions,
+            $statsPermissions,
+            $prospectPermissions,
+            $investisseurPermissions,
+            $blockagePermissions
+        )));
+
+        foreach ($allPermissions as $p) {
+            Permission::firstOrCreate(['name' => $p, 'guard_name' => $guard]);
         }
 
-        // Créer le rôle admin et lui assigner toutes les permissions
+        // ============== Rôles ==============
+        // Admin: tout
         $adminRole = Role::firstOrCreate(['name' => 'admin', 'guard_name' => $guard]);
         $adminRole->syncPermissions($allPermissions);
 
-        // Créer le rôle responsable fipa avec permissions limitées
-        $responsablePermissions = [
-            'view tasks',
-            'create tasks',
-            'edit tasks',
-            'delete tasks',
-            'view pipeline tasks',  
-            'create pipeline tasks', 
-            'edit pipeline tasks',
-            'update pipeline task status',
-            'view entity pipeline tasks',
-            'view stage pipeline tasks',
-        ];
+        // Responsable FIPA: restrictions
+        $responsableAllowed = array_values(array_diff($allPermissions, [
+            // Entreprises: pas de gestion
+            'create entreprises','edit entreprises','delete entreprises','update entreprise pipeline stage',
+
+            // Actions: pas de création/édition/suppression/MAJ statut
+            'create actions','edit actions','delete actions','update action status',
+
+            // Users: aucune gestion
+            'view users','create users','edit users','delete users','assign user roles','assign user permissions',
+
+            // Global pipeline stages: pas de gestion
+            'create pipeline stages','edit pipeline stages','delete pipeline stages','reorder pipeline stages',
+        ]));
 
         $responsableRole = Role::firstOrCreate(['name' => 'responsable fipa', 'guard_name' => $guard]);
-        $responsableRole->syncPermissions($responsablePermissions);
+        $responsableRole->syncPermissions($responsableAllowed);
 
-        // Assigner les rôles aux utilisateurs existants (si trouvés)
-        $admin = User::find(1);
+        // ============== Assignation par défaut (optionnelle) ==============
+          $admin = User::find(1);
         if ($admin && !$admin->hasRole('admin')) {
             $admin->assignRole($adminRole);
         }
@@ -104,5 +234,7 @@ class RolesAndPermissionsSeeder extends Seeder
         if ($responsable && !$responsable->hasRole('responsable fipa')) {
             $responsable->assignRole($responsableRole);
         }
+
+        app()[\Spatie\Permission\PermissionRegistrar::class]->forgetCachedPermissions();
     }
 }

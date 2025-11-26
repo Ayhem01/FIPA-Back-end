@@ -198,12 +198,21 @@ class ActionController extends Controller
      * Mettre à jour une action et son entité spécifique
      */
 
-    public function update(ActionRequest $request, $id)
+   public function update(ActionRequest $request, $id)
     {
         Log::info('Données reçues pour mise à jour d\'action:', $request->all());
 
         try {
             $action = Action::findOrFail($id);
+
+            // Vérification autorisation
+            $user = auth('api')->user() ?? auth()->user();
+            if (!$user) {
+                return response()->json(['success' => false, 'message' => 'Unauthenticated'], 401);
+            }
+            if (!$this->canModifyAction($user, $action)) {
+                return response()->json(['success' => false, 'message' => 'Forbidden'], 403);
+            }
 
             // 1. Mettre à jour l'action
             $action->update($request->validated());
@@ -323,33 +332,35 @@ class ActionController extends Controller
         try {
             $action = Action::findOrFail($id);
 
-            $invitesCount = $action->invites()->count();
-            if ($invitesCount > 0) {
-                return response()->json([
-                    'success' => false,
-                    'message' => 'Impossible de supprimer cette action car elle possède ' . $invitesCount . ' invité(s)'
-                ], 409);
-            }
+            // Supprimer les invites liés avant l'action (cascade applicative)
+            DB::transaction(function () use ($action) {
+                // Supprimer les invités
+                $action->invites()->delete();
 
-            $modelMap = [
-                'media' => Media::class,
-                'cte' => CTE::class,
-                'delegation' => Delegations::class,
-                'visite_entreprise' => VisitesEntreprise::class,
-                'salon_sectoriel' => SalonSectoriels::class,
-                'demarchage_direct' => DemarchageDirect::class,
-                'seminaire_jipays' => SeminaireJIPays::class,
-                'seminaire_jisecteur' => SeminairesJISecteur::class,
-                'salon' => Salons::class,
-            ];
+                // Supprimer l'entité spécifique
+                $modelMap = [
+                    'media' => Media::class,
+                    'cte' => CTE::class,
+                    'delegation' => Delegations::class,
+                    'visite_entreprise' => VisitesEntreprise::class,
+                    'salon_sectoriel' => SalonSectoriels::class,
+                    'demarchage_direct' => DemarchageDirect::class,
+                    'seminaire_jipays' => SeminaireJIPays::class,
+                    'seminaire_jisecteur' => SeminairesJISecteur::class,
+                    'salon' => Salons::class,
+                ];
 
-            $type = $action->type;
-            if (isset($modelMap[$type]) && method_exists($action, $type)) {
-                $entity = $action->$type;
-                if ($entity) $entity->delete();
-            }
+                $type = $action->type;
+                if (isset($modelMap[$type]) && method_exists($action, $type)) {
+                    $entity = $action->$type;
+                    if ($entity) {
+                        $entity->delete();
+                    }
+                }
 
-            $action->delete();
+                // Supprimer l'action
+                $action->delete();
+            });
 
             return response()->json([
                 'success' => true,

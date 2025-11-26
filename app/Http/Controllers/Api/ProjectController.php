@@ -13,6 +13,9 @@ use Illuminate\Support\Facades\Validator;
 use App\Models\Investisseur;
 use App\Services\PipelineTaskService; // Ensure this is the correct namespace for PipelineTaskService
 use Illuminate\Support\Facades\Log;
+use App\Services\BlockchainTxLogger; // Ensure this is the correct namespace for BlockchainTxLogger
+use App\Services\BlockchainService; // Ensure this is the correct namespace for BlockchainService
+use Illuminate\Support\Facades\DB;
 
 
 
@@ -202,99 +205,376 @@ class ProjectController extends Controller
         }
     }
 
-    /**
-     * Mettre à jour un projet existant
-     */
-    public function update(ProjectRequest $request, $id)
-    {
-        try {
-            $project = Project::findOrFail($id);
-            $project->update($request->validated());
-            
-            // Recharger les relations
-            $project->load(['secteur', 'responsable',  'pipelineStage']);
-            
-            return response()->json([
-                'success' => true,
-                'message' => 'Projet mis à jour avec succès',
-                'data' => $project
-            ]);
-        } catch (\Exception $e) {
+public function update(Request $request, $id)
+{
+    try {
+        $project = Project::findOrFail($id);
+        
+        $validator = Validator::make($request->all(), [
+            'title' => 'sometimes|required|string|max:255',
+            'description' => 'nullable|string',
+            'company_name' => 'sometimes|required|string|max:255',
+            'market_target' => 'nullable|string',
+            'investment_amount' => 'nullable|numeric|min:0',
+            'jobs_expected' => 'nullable|integer|min:0',
+            'industrial_zone' => 'nullable|string|max:255',
+            'secteur_id' => 'sometimes|required|exists:secteurs,id',
+            'responsable_id' => 'nullable|exists:users,id',
+            'start_date' => 'nullable|date',
+            'end_date' => 'nullable|date|after:start_date',
+            'status' => 'nullable|in:planned,in_progress,completed,abandoned,suspended,on_hold',
+            'notes' => 'nullable|string'
+        ]);
+
+        if ($validator->fails()) {
             return response()->json([
                 'success' => false,
-                'message' => 'Erreur lors de la mise à jour du projet',
-                'error' => $e->getMessage()
-            ], $e instanceof \Illuminate\Database\Eloquent\ModelNotFoundException ? 404 : 500);
+                'message' => 'Validation échouée',
+                'errors' => $validator->errors()
+            ], 422);
         }
+
+        // ========================================
+        // 1️⃣ BLOCKCHAIN: MISE À JOUR DU PROJET
+        // ========================================
+        $companyName = $request->input('company_name') ?? $project->company_name;
+        $marketTarget = $request->input('market_target') ?? $project->market_target ?? '';
+        $investmentAmount = (int)($request->input('investment_amount') ?? $project->investment_amount);
+        $jobsExpected = (int)($request->input('jobs_expected') ?? $project->jobs_expected);
+        $industrialZone = $request->input('industrial_zone') ?? $project->industrial_zone ?? '';
+        $statut = $request->input('status') ?? $project->status ?? 'planned';
+
+        $tx = BlockchainTxLogger::start('update_projet', 'project', $project->id, [
+            'projetId' => (int)$project->id,
+            'company_name' => $companyName,
+            'market_target' => $marketTarget,
+            'investment_amount' => $investmentAmount,
+            'jobs_expected' => $jobsExpected,
+            'industrial_zone' => $industrialZone,
+            'statut' => $statut
+        ]);
+
+        $txHash = null;
+        $blockNumber = null;
+
+        try {
+            $service = app(BlockchainService::class);
+            
+            // ✅ Appel MS: PUT /api/projet/:projetId
+            $res = $service->updateProjet(
+                projetId: (int)$project->id,
+                companyName: $companyName,
+                marketTarget: $marketTarget,
+                investmentAmount: $investmentAmount,
+                jobsExpected: $jobsExpected,
+                industrialZone: $industrialZone,
+                statut: ucfirst($statut) // Planned, InProgress, etc.
+            );
+            
+            BlockchainTxLogger::success($tx, $res);
+            
+            $txHash = $res['data']['transactionHash'] ?? null;
+            $blockNumber = $res['data']['blockNumber'] ?? null;
+            
+            \Log::info('Mise à jour projet blockchain réussie', [
+                'project_id' => $project->id,
+                'tx_hash' => $txHash
+            ]);
+            
+        } catch (\Throwable $e) {
+            BlockchainTxLogger::fail($tx, $e->getMessage());
+            \Log::warning('Blockchain update failed, continuing with DB update', [
+                'project_id' => $project->id,
+                'error' => $e->getMessage()
+            ]);
+        }
+
+        // ========================================
+        // 2️⃣ BASE DE DONNÉES: MISE À JOUR
+        // ========================================
+        $updateData = $request->all();
+        
+        // Ajouter les infos blockchain si disponibles
+        if ($txHash) {
+            $updateData['tx_hash'] = $txHash;
+            $updateData['tx_block_number'] = $blockNumber;
+        }
+        
+        $project->update($updateData);
+
+        // ========================================
+        // 3️⃣ RÉPONSE
+        // ========================================
+        $project->refresh();
+        $project->load(['secteur', 'responsable', 'pipelineStage']);
+        
+        return response()->json([
+            'success' => true,
+            'message' => 'Projet mis à jour avec succès',
+            'data' => [
+                'project' => $project,
+                'blockchain_info' => [
+                    'tx_hash' => $txHash,
+                    'block_number' => $blockNumber
+                ]
+            ]
+        ]);
+    } catch (\Exception $e) {
+        \Log::error('Erreur update projet', [
+            'project_id' => $id,
+            'error' => $e->getMessage(),
+            'trace' => $e->getTraceAsString()
+        ]);
+
+        return response()->json([
+            'success' => false,
+            'message' => 'Erreur lors de la mise à jour du projet',
+            'error' => $e->getMessage()
+        ], $e instanceof \Illuminate\Database\Eloquent\ModelNotFoundException ? 404 : 500);
     }
+}
+
 
     /**
      * Supprimer un projet
      */
     public function destroy($id)
-    {
+{
+    try {
+        $project = Project::findOrFail($id);
+        
+        // Vérifier si le projet peut être supprimé
+        if ($project->status === 'completed') {
+            return response()->json([
+                'success' => false,
+                'message' => 'Impossible de supprimer un projet terminé.'
+            ], 400);
+        }
+
+        // ========================================
+        // 1️⃣ BLOCKCHAIN: SUPPRESSION
+        // ========================================
+        $tx = BlockchainTxLogger::start('delete_projet', 'project', $project->id, [
+            'projetId' => (int)$project->id,
+            'company_name' => $project->company_name
+        ]);
+
+        $txHash = null;
+        $blockNumber = null;
+
         try {
-            $project = Project::findOrFail($id);
+            $service = app(BlockchainService::class);
+            
+            // ✅ Appel MS: DELETE /api/projet/:projetId
+            $res = $service->deleteProjet(
+                projetId: (int)$project->id
+            );
+            
+            BlockchainTxLogger::success($tx, $res);
+            
+            $txHash = $res['data']['transactionHash'] ?? null;
+            $blockNumber = $res['data']['blockNumber'] ?? null;
+            
+            \Log::info('Suppression projet blockchain réussie', [
+                'project_id' => $project->id,
+                'tx_hash' => $txHash
+            ]);
+            
+        } catch (\Throwable $e) {
+            BlockchainTxLogger::fail($tx, $e->getMessage());
+            \Log::warning('Blockchain deletion failed, continuing with DB deletion', [
+                'project_id' => $project->id,
+                'error' => $e->getMessage()
+            ]);
+        }
+
+        // ========================================
+        // 2️⃣ BASE DE DONNÉES: SUPPRESSION
+        // ========================================
+        DB::beginTransaction();
+
+        try {
+            // Supprimer les progressions du pipeline
+            $project->pipelineProgressions()->delete();
+            
+            // Supprimer les blockages associés
+            if (method_exists($project, 'blockages')) {
+                $project->blockages()->delete();
+            }
+            
+            // Supprimer le projet
             $project->delete();
             
-            return response()->json([
-                'success' => true,
-                'message' => 'Projet supprimé avec succès'
-            ]);
-        } catch (\Exception $e) {
-            return response()->json([
-                'success' => false,
-                'message' => 'Erreur lors de la suppression du projet',
-                'error' => $e->getMessage()
-            ], $e instanceof \Illuminate\Database\Eloquent\ModelNotFoundException ? 404 : 500);
-        }
-    }
-    
-    /**
-     * Changer le statut d'un projet
-     */
-    public function changeStatus(Request $request, $id)
-    {
-        try {
-            $validator = Validator::make($request->all(), [
-                'status' => 'required|in:idea,in_progress,in_production,planned,completed,abandoned,suspended,on_hold'
-            ]);
+            DB::commit();
 
-            if ($validator->fails()) {
-                return response()->json([
-                    'success' => false,
-                    'message' => 'Validation échouée',
-                    'errors' => $validator->errors()
-                ], 422);
-            }
-            
-            $project = Project::findOrFail($id);
-            $status = $request->status;
-            
-            // Gérer les statuts booléens (ancienne logique)
-            if (in_array($status, ['idea', 'in_progress', 'in_production'])) {
-                $project->idea = ($status === 'idea');
-                $project->in_progress = ($status === 'in_progress');
-                $project->in_production = ($status === 'in_production');
-            }
-            
-            // Mettre à jour le statut principal
-            $project->status = $status;
-            $project->save();
-            
-            return response()->json([
-                'success' => true,
-                'message' => 'Statut du projet mis à jour avec succès',
-                'data' => $project
-            ]);
         } catch (\Exception $e) {
+            DB::rollBack();
+            throw $e;
+        }
+
+        // ========================================
+        // 3️⃣ RÉPONSE
+        // ========================================
+        return response()->json([
+            'success' => true,
+            'message' => 'Projet supprimé avec succès',
+            'data' => [
+                'project_id' => $id,
+                'blockchain_info' => [
+                    'tx_hash' => $txHash,
+                    'block_number' => $blockNumber
+                ]
+            ]
+        ]);
+    } catch (\Exception $e) {
+        \Log::error('Erreur destroy projet', [
+            'project_id' => $id,
+            'error' => $e->getMessage(),
+            'trace' => $e->getTraceAsString()
+        ]);
+
+        return response()->json([
+            'success' => false,
+            'message' => 'Erreur lors de la suppression du projet',
+            'error' => $e->getMessage()
+        ], $e instanceof \Illuminate\Database\Eloquent\ModelNotFoundException ? 404 : 500);
+    }
+}
+
+
+public function changeStatus(Request $request, $id)
+{
+    try {
+        $validator = Validator::make($request->all(), [
+            'status' => 'required|in:planned,in_progress,completed,abandoned,suspended,on_hold'
+        ]);
+
+        if ($validator->fails()) {
             return response()->json([
                 'success' => false,
-                'message' => 'Erreur lors de la mise à jour du statut',
-                'error' => $e->getMessage()
-            ], $e instanceof \Illuminate\Database\Eloquent\ModelNotFoundException ? 404 : 500);
+                'message' => 'Validation échouée',
+                'errors' => $validator->errors()
+            ], 422);
         }
+        
+        $project = Project::findOrFail($id);
+        $nouveauStatut = $request->status;
+
+        // ========================================
+        // 1️⃣ BLOCKCHAIN: MISE À JOUR DU STATUT
+        // ========================================
+        $tx = BlockchainTxLogger::start('update_projet_status', 'project', $project->id, [
+            'projetId' => (int)$project->id,
+            'ancien_statut' => $project->status,
+            'nouveau_statut' => $nouveauStatut
+        ]);
+
+        $txHash = null;
+        $blockNumber = null;
+        $statusFromChain = null;
+
+        try {
+            $service = app(BlockchainService::class);
+            
+            // ✅ Appel MS: PUT /api/projet/:projetId/status
+            $res = $service->updateProjetStatus(
+                projetId: (int)$project->id,
+                statut: ucfirst($nouveauStatut) // Planned, InProgress, etc.
+            );
+            
+            BlockchainTxLogger::success($tx, $res);
+            
+            $statusFromChain = $res['data']['status'] ?? null;
+            $txHash = $res['data']['transactionHash'] ?? null;
+            $blockNumber = $res['data']['blockNumber'] ?? null;
+            
+            \Log::info('Mise à jour statut projet blockchain réussie', [
+                'project_id' => $project->id,
+                'ancien_statut' => $project->status,
+                'nouveau_statut' => $nouveauStatut,
+                'tx_hash' => $txHash
+            ]);
+            
+        } catch (\Throwable $e) {
+            BlockchainTxLogger::fail($tx, $e->getMessage());
+            \Log::warning('Blockchain status update failed, continuing with DB update', [
+                'project_id' => $project->id,
+                'error' => $e->getMessage()
+            ]);
+        }
+
+        // ========================================
+        // 2️⃣ BASE DE DONNÉES: MISE À JOUR
+        // ========================================
+        // Gérer les statuts booléens (ancienne logique de compatibilité)
+        $updateData = ['status' => $nouveauStatut];
+        
+        if (in_array($nouveauStatut, ['idea', 'in_progress', 'in_production'])) {
+            $updateData['idea'] = ($nouveauStatut === 'idea');
+            $updateData['in_progress'] = ($nouveauStatut === 'in_progress');
+            $updateData['in_production'] = ($nouveauStatut === 'in_production');
+        }
+        
+        // Ajouter les infos blockchain si disponibles
+        if ($txHash) {
+            $updateData['tx_hash'] = $txHash;
+            $updateData['tx_block_number'] = $blockNumber;
+        }
+        
+        $project->update($updateData);
+
+        // ========================================
+        // 3️⃣ RÉPONSE
+        // ========================================
+        $project->refresh();
+        
+        return response()->json([
+            'success' => true,
+            'message' => 'Statut du projet mis à jour avec succès',
+            'data' => [
+                'project' => $project,
+                'statut_precedent' => $request->status,
+                'statut_actuel' => $project->status,
+                'blockchain_info' => [
+                    'status_chain' => $statusFromChain,
+                    'status_label' => $this->getStatusLabel($project->status),
+                    'tx_hash' => $txHash,
+                    'block_number' => $blockNumber
+                ]
+            ]
+        ]);
+    } catch (\Exception $e) {
+        \Log::error('Erreur changeStatus projet', [
+            'project_id' => $id,
+            'error' => $e->getMessage(),
+            'trace' => $e->getTraceAsString()
+        ]);
+
+        return response()->json([
+            'success' => false,
+            'message' => 'Erreur lors de la mise à jour du statut',
+            'error' => $e->getMessage()
+        ], $e instanceof \Illuminate\Database\Eloquent\ModelNotFoundException ? 404 : 500);
     }
+}
+
+/**
+ * Helper pour obtenir le label du statut
+ */
+private function getStatusLabel(string $status): string
+{
+    $labels = [
+        'planned' => 'Planifié',
+        'in_progress' => 'En cours',
+        'completed' => 'Terminé',
+        'abandoned' => 'Abandonné',
+        'suspended' => 'Suspendu',
+        'on_hold' => 'En attente'
+    ];
+    
+    return $labels[$status] ?? $status;
+}
+
     
     /**
      * Mettre à jour l'étape du pipeline
@@ -561,149 +841,11 @@ class ProjectController extends Controller
  */
 public function createFromInvestisseur(Request $request)
 {
-    try {
-        $validator = Validator::make($request->all(), [
-            'investisseur_id' => 'required|exists:investisseurs,id',
-            'title' => 'required|string|max:255',
-            'description' => 'nullable|string',
-            'company_name' => 'required|string|max:255',
-            'secteur_id' => 'required|exists:secteurs,id',
-            'responsable_id' => 'required|exists:users,id',
-            'investment_amount' => 'required|numeric|min:0',
-            'start_date' => 'required|date',
-            'end_date' => 'nullable|date|after:start_date',
-            'market_target' => 'nullable|string',
-            'nationality' => 'nullable|string',
-            'foreign_percentage' => 'nullable|numeric|min:0|max:100',
-            'jobs_expected' => 'nullable|integer|min:0',
-            'industrial_zone' => 'nullable|string',
-            'contact_source' => 'nullable|string',
-            'initial_contact_person' => 'nullable|string',
-            'first_contact_date' => 'nullable|date',
-            'notes' => 'nullable|string',
-            // Nouveaux champs supportés par le frontend
-            'idea' => 'nullable|boolean',
-            'in_progress' => 'nullable|boolean',
-            'in_production' => 'nullable|boolean',
-            'is_blocked' => 'nullable|boolean',
-            'pipeline_stage_id' => 'nullable|exists:pipeline_stages,id',
-            'status' => 'nullable|string',
-            'created_by' => 'nullable|exists:users,id'
-        ]);
-
-        if ($validator->fails()) {
-            return response()->json([
-                'success' => false,
-                'message' => 'Validation échouée',
-                'errors' => $validator->errors()
-            ], 422);
-        }
-
-        $investisseur = Investisseur::with(['entreprise', 'secteur', 'pays', 'pipelineProgressions.stage'])->findOrFail($request->investisseur_id);
-        
-        // Nouvelle logique de validation compatible avec le frontend
-        if (!$this->canConvertInvestisseurToProject($investisseur)) {
-            return response()->json([
-                'success' => false,
-                'message' => 'Cet investisseur ne peut pas être converti en projet. Il doit être à la dernière étape du pipeline ou avoir complété une étape finale.',
-                'debug' => [
-                    'statut' => $investisseur->statut,
-                    'current_stage' => $investisseur->currentPipelineStage(),
-                    'is_at_last_stage' => $this->isAtLastStage($investisseur),
-                    'has_final_stage' => $this->hasFinalStageCompleted($investisseur)
-                ]
-            ], 400);
-        }
-        
-        // Préparer les données du projet selon les colonnes exactes de la base de données
-        $projectData = [
-            // Informations de base (colonnes obligatoires)
-            'title' => $request->input('title'),
-            'description' => $request->input('description'),
-            'company_name' => $request->input('company_name'),
-            
-            // Status et flags booléens
-            'idea' => $request->input('idea', false),
-            'in_progress' => $request->input('in_progress', false),
-            'in_production' => $request->input('in_production', false),
-            'is_blocked' => $request->input('is_blocked', false),
-            
-            // Relations (IDs)
-            'secteur_id' => $request->input('secteur_id'),
-            'responsable_id' => $request->input('responsable_id'),
-            'investisseur_id' => $investisseur->id,
-            
-            // Détails du projet
-            'market_target' => $request->input('market_target'),
-            'nationality' => $request->input('nationality'),
-            'foreign_percentage' => $request->input('foreign_percentage', 0),
-            'investment_amount' => $request->input('investment_amount'),
-            'jobs_expected' => $request->input('jobs_expected', 0),
-            'industrial_zone' => $request->input('industrial_zone'),
-            
-            // Pipeline
-            'pipeline_stage_id' => $request->input('pipeline_stage_id'),
-            'pipeline_completed_at' => null,
-            'pipeline_completed_by' => null,
-            
-            // Dates
-            'start_date' => $request->input('start_date'),
-            'end_date' => $request->input('end_date'),
-            'first_contact_date' => $request->input('first_contact_date'),
-            
-            // Contact et source
-            'contact_source' => $request->input('contact_source', 'Conversion depuis Investisseur'),
-            'initial_contact_person' => $request->input('initial_contact_person', $investisseur->nom),
-            
-            // Métadonnées
-            'status' => $request->input('status', 'active'),
-            'created_by' => $request->input('created_by', Auth::id()),
-            'converted_from_investisseur_at' => now(),
-        ];
-        
-        // Créer le projet
-        $projet = Project::create($projectData);
-        
-        if (!$projet) {
-            return response()->json([
-                'success' => false,
-                'message' => 'Erreur lors de la création du projet à partir de l\'investisseur'
-            ], 500);
-        }
-
-        // Marquer l'investisseur comme converti
-        $investisseur->update([
-            'statut' => 'converti',
-            'converted_to_project_at' => now(),
-            'converted_by' => Auth::id()
-        ]);
-        
-        // Charger les relations nécessaires
-        $projet->load([
-            'investisseur.prospect.invite',
-            'secteur', 
-            'responsable', 
-            'creator',
-            'pipelineStage'
-        ]);
-
-        return response()->json([
-            'success' => true,
-            'message' => 'Projet créé avec succès à partir de l\'investisseur',
-            'data' => [
-                'project' => $projet,
-                'investisseur' => $investisseur->fresh()
-            ]
-        ], 201);
-        
-    } catch (\Exception $e) {
-        \Log::error('Erreur dans createFromInvestisseur: ' . $e->getMessage());
-        return response()->json([
-            'success' => false,
-            'message' => 'Erreur lors de la création du projet',
-            'error' => $e->getMessage()
-        ], 500);
-    }
+    // Rediriger vers la bonne méthode
+    return app(InvestisseurController::class)->convertToProject(
+        $request,
+        $request->input('investisseur_id')
+    );
 }
 
 

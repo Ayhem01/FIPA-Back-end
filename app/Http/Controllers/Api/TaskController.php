@@ -15,7 +15,8 @@ use Carbon\Carbon;
 use Illuminate\Support\Facades\Log;
 use App\Helpers\AuthorizationHelper;
 use App\Services\PipelineTaskService;
-
+use App\Services\BlockchainService;
+use App\Models\BlockchainTransaction;
 
 class TaskController extends Controller
 {
@@ -28,80 +29,98 @@ public function index(Request $request): JsonResponse
     $user = Auth::user();
     $userId = $user->id;
 
-    // Log pour déboguer les paramètres reçus
     \Log::info('Filtres de tâches reçus:', $request->all());
-    
+
+    // Charger relations utilisateur & assigné
     $query = Task::query()->with(['user:id,name', 'assignee:id,name']);
-    
-    // Si ce n'est pas un admin, restreindre aux tâches créées ou assignées à l'utilisateur
-    if (!$this->userHasRole('admin') && !$this->userCan('manage all tasks')) {
+
+    /**
+     * ----------------------------------------------------
+     *  🔐 1) RESTRICTION SELON LE RÔLE (ADMIN OU PAS)
+     * ----------------------------------------------------
+     */
+
+    $isAdmin = $user->hasRole('admin') || $user->can('manage all tasks');
+
+    if (!$isAdmin) {
+        // Utilisateur normal → que ses propres tâches (créées ou assignées)
         $query->where(function ($q) use ($userId) {
             $q->where('user_id', $userId)
               ->orWhere('assignee_id', $userId);
         });
     }
-    
-    // ✅ Filtrage standard
+
+    /**
+     * ----------------------------------------------------
+     *  🎛️ 2) FILTRES STANDARD
+     * ----------------------------------------------------
+     */
+
     if ($request->filled('status')) {
         $query->where('status', $request->status);
     }
-    
+
     if ($request->filled('priority')) {
         $query->where('priority', $request->priority);
     }
-    
+
     if ($request->filled('type')) {
         $query->where('type', $request->type);
     }
-    
+
     if ($request->filled('start_date') && $request->filled('end_date')) {
-        $query->whereBetween('start', [$request->start_date, $request->end_date]);
+        $query->whereBetween('start', [
+            $request->start_date,
+            $request->end_date
+        ]);
     }
-    
-    // ✅ Filtres avancés (pour tous)
-    // IMPORTANT: Appliquer les filtres dans le bon ordre pour éviter les conflits
-    
-    // Gérer les filtres user_id, assignee_id et exclude_user_id de manière exclusive
-    // pour éviter des conditions contradictoires
-    
+
+    /**
+     * ----------------------------------------------------
+     *  🔎 3) FILTRES AVANCÉS
+     * ----------------------------------------------------
+     */
+
     if ($request->filled('user_or_assignee_id')) {
         $query->where(function ($q) use ($request) {
             $q->where('user_id', $request->user_or_assignee_id)
               ->orWhere('assignee_id', $request->user_or_assignee_id);
         });
     }
-    
+
     if ($request->filled('user_id')) {
         $query->where('user_id', $request->user_id);
     }
-    
+
     if ($request->filled('assignee_id')) {
         $query->where('assignee_id', $request->assignee_id);
     }
-    
+
     if ($request->filled('exclude_user_id')) {
-        $excludeUserId = $request->exclude_user_id;
-        $query->where('user_id', '!=', $excludeUserId);
+        $query->where('user_id', '!=', $request->exclude_user_id);
     }
-    
-    
-    
-    // ✅ Tri et pagination
+
+    /**
+     * ----------------------------------------------------
+     *  📊 4) TRI & PAGINATION
+     * ----------------------------------------------------
+     */
+
     $sortField = $request->get('sort_field', 'created_at');
-    $sortDirection = $request->get('sort_direction', 'desc');
+    $sortAscDesc = $request->get('sort_direction', 'desc');
     $perPage = $request->get('per_page', 10);
-    
-    // Log SQL pour déboguer
-    \Log::info('Requête SQL:', ['sql' => $query->toSql(), 'bindings' => $query->getBindings()]);
-    
-    $tasks = $query->orderBy($sortField, $sortDirection)->paginate($perPage);
-    
+
+    \Log::info('SQL:', ['sql' => $query->toSql(), 'bindings' => $query->getBindings()]);
+
+    $tasks = $query->orderBy($sortField, $sortAscDesc)->paginate($perPage);
+
     return response()->json([
         'status' => 'success',
         'data' => $tasks,
         'message' => 'Tâches récupérées avec succès'
     ]);
 }
+
     
     /**
      * Créer une nouvelle tâche
@@ -692,77 +711,96 @@ public function getCalendarTasks(Request $request): JsonResponse
      * Récupérer les statistiques pour le tableau de bord
      */
     public function getDashboardStats(): JsonResponse
-    {
-        try {
-            $userId = Auth::id();
-            
-            // Statistiques globales
-            $totalTasks = Task::where('assignee_id', $userId)->count();
-            $completedTasks = Task::where('assignee_id', $userId)->where('status', 'completed')->count();
-            $inProgressTasks = Task::where('assignee_id', $userId)->where('status', 'in_progress')->count();
-            $notStartedTasks = Task::where('assignee_id', $userId)->where('status', 'not_started')->count();
-            
-            // Tâches en retard
-            $today = Carbon::now()->startOfDay();
-            $overdueTasks = Task::where('assignee_id', $userId)
-                                ->where('end', '<', $today)
-                                ->whereNotIn('status', ['completed', 'deferred'])
-                                ->count();
-            
-            // Tâches à venir cette semaine
-            $weekStart = Carbon::now()->startOfDay();
-            $weekEnd = Carbon::now()->addDays(7)->endOfDay();
-            $upcomingTasks = Task::where('assignee_id', $userId)
-                                 ->whereBetween('start', [$weekStart, $weekEnd])
-                                 ->whereNotIn('status', ['completed', 'deferred'])
-                                 ->count();
-            
-            // Répartition par type
-            $tasksByType = Task::where('assignee_id', $userId)
-                              ->select('type', DB::raw('count(*) as count'))
-                              ->groupBy('type')
-                              ->get();
-            
-            // Répartition par statut
-            $tasksByStatus = Task::where('assignee_id', $userId)
-                               ->select('status', DB::raw('count(*) as count'))
-                               ->groupBy('status')
-                               ->get();
-            
-            // Tâches récentes
-            $recentTasks = Task::where('assignee_id', $userId)
-                              ->orderBy('created_at', 'desc')
-                              ->limit(5)
-                              ->get(['id', 'title', 'type', 'status', 'priority', 'start', 'end']);
-            
-            return response()->json([
-                'status' => 'success',
-                'data' => [
-                    'total' => $totalTasks,
-                    'completed' => $completedTasks,
-                    'inProgress' => $inProgressTasks,
-                    'notStarted' => $notStartedTasks,
-                    'overdue' => $overdueTasks,
-                    'upcoming' => $upcomingTasks,
-                    'byType' => $tasksByType,
-                    'byStatus' => $tasksByStatus,
-                    'recentTasks' => $recentTasks
-                ],
-                'message' => 'Statistiques récupérées avec succès'
-            ]);
-        } catch (\Exception $e) {
-            Log::error('Erreur lors de la récupération des statistiques', [
-                'user_id' => Auth::id(),
-                'error' => $e->getMessage()
-            ]);
-            
-            return response()->json([
-                'status' => 'error',
-                'message' => 'Une erreur est survenue lors de la récupération des statistiques',
-                'error' => config('app.debug') ? $e->getMessage() : null
-            ], 500);
+{
+    try {
+        $user = Auth::user();
+        $userId = $user?->id;
+
+        $isAdmin = $this->userHasRole('admin') || $this->userCan('manage all tasks');
+
+        $base = Task::query();
+
+        // Portée des données
+        if (!$isAdmin) {
+            if (!$userId) {
+                return response()->json(['status' => 'error', 'message' => 'Unauthenticated'], 401);
+            }
+            $base->where('assignee_id', $userId);
+        } else {
+            // Admin: filtre optionnel par assigné
+            if (request()->filled('assignee_id')) {
+                $base->where('assignee_id', request()->get('assignee_id'));
+            }
         }
+
+        $today = Carbon::now()->startOfDay();
+        $weekStart = Carbon::now()->startOfDay();
+        $weekEnd = Carbon::now()->addDays(7)->endOfDay();
+
+        // Compteurs
+        $totalTasks      = (clone $base)->count();
+        $completedTasks  = (clone $base)->where('status', 'completed')->count();
+        $inProgressTasks = (clone $base)->where('status', 'in_progress')->count();
+        $notStartedTasks = (clone $base)->where('status', 'not_started')->count();
+
+        // Overdue et à venir
+        $overdueTasks = (clone $base)
+            ->where('end', '<', $today)
+            ->whereNotIn('status', ['completed', 'deferred'])
+            ->count();
+
+        $upcomingTasks = (clone $base)
+            ->whereBetween('start', [$weekStart, $weekEnd])
+            ->whereNotIn('status', ['completed', 'deferred'])
+            ->count();
+
+        // Groupes
+        $tasksByType = (clone $base)
+            ->select('type', DB::raw('count(*) as count'))
+            ->groupBy('type')
+            ->get();
+
+        $tasksByStatus = (clone $base)
+            ->select('status', DB::raw('count(*) as count'))
+            ->groupBy('status')
+            ->get();
+
+        // Récentes
+        $recentTasks = (clone $base)
+            ->orderBy('created_at', 'desc')
+            ->limit(5)
+            ->get(['id', 'title', 'type', 'status', 'priority', 'start', 'end']);
+
+        return response()->json([
+            'status' => 'success',
+            'data' => [
+                'scope' => $isAdmin ? 'global' : 'user',
+                'assignee_filter' => $isAdmin ? request()->get('assignee_id') : $userId,
+                'total' => $totalTasks,
+                'completed' => $completedTasks,
+                'inProgress' => $inProgressTasks,
+                'notStarted' => $notStartedTasks,
+                'overdue' => $overdueTasks,
+                'upcoming' => $upcomingTasks,
+                'byType' => $tasksByType,
+                'byStatus' => $tasksByStatus,
+                'recentTasks' => $recentTasks
+            ],
+            'message' => 'Statistiques récupérées avec succès'
+        ]);
+    } catch (\Exception $e) {
+        Log::error('Erreur lors de la récupération des statistiques', [
+            'user_id' => Auth::id(),
+            'error' => $e->getMessage()
+        ]);
+
+        return response()->json([
+            'status' => 'error',
+            'message' => 'Une erreur est survenue lors de la récupération des statistiques',
+            'error' => config('app.debug') ? $e->getMessage() : null
+        ], 500);
     }
+}
 
     /**
      * Récupérer les tâches de l'utilisateur connecté (créées ou assignées)
@@ -1261,7 +1299,6 @@ public function getCalendarTasks(Request $request): JsonResponse
     }
  
 
-// Dans TaskController
 public function createPipelineTask(Request $request, $entityType, $entityId, $stageId, PipelineTaskService $pipelineTaskService)
 {
     try {
@@ -1272,7 +1309,8 @@ public function createPipelineTask(Request $request, $entityType, $entityId, $st
             'start' => 'required|date',
             'end' => 'nullable|date|after_or_equal:start',
             'type' => 'required|in:call,meeting,email_journal,note,todo',
-            'priority' => 'nullable|in:low,medium,high,urgent'
+            'priority' => 'nullable|in:low,medium,high,urgent',
+            'status' => 'nullable|in:not_started,in_progress,completed,deferred,waiting'
         ]);
 
         if ($validator->fails()) {
@@ -1283,6 +1321,7 @@ public function createPipelineTask(Request $request, $entityType, $entityId, $st
             ], 422);
         }
 
+        // Normaliser le type d'entité
         if ($entityType === 'investisseur') {
             $entityType = 'investor';
         }
@@ -1298,7 +1337,9 @@ public function createPipelineTask(Request $request, $entityType, $entityId, $st
             ], 400);
         }
 
-        // Utiliser le service pour créer la tâche
+        // ========================================
+        // 1️⃣ BASE DE DONNÉES: CRÉER LA TÂCHE VIA LE SERVICE
+        // ========================================
         $task = $pipelineTaskService->createTaskForStage(
             $entityType,
             $entityId,
@@ -1306,20 +1347,113 @@ public function createPipelineTask(Request $request, $entityType, $entityId, $st
             $request->all()
         );
 
+        // ========================================
+        // 2️⃣ BLOCKCHAIN: ENREGISTRER LA TÂCHE
+        // ========================================
+        // Créer l'enregistrement blockchain PENDING
+        $blockchainTx = BlockchainTransaction::create([
+            'related_type' => 'task',
+            'related_id' => $task->id,
+            'action' => 'create_task',
+            'status' => BlockchainTransaction::STATUS_PENDING,
+            'request' => [
+                'title' => $task->title,
+                'description' => $task->description ?? '',
+                'status' => $task->status ?? 'not_started',
+                'entity_type' => $entityType,
+                'entity_id' => $entityId,
+                'created_by' => Auth::id()
+            ]
+        ]);
+
+        try {
+            $service = app(BlockchainService::class);
+            
+            \Log::info('📤 Envoi tâche pipeline vers blockchain', [
+                'task_id' => $task->id,
+                'entity_type' => $entityType,
+                'entity_id' => $entityId,
+                'stage_id' => $stageId
+            ]);
+            
+            $res = $service->createTaskOnChain(
+                title: $task->title,
+                description: $task->description ?? '',
+                status: $task->status ?? 'not_started',
+                entityId: (int)$entityId,
+                entityType: $entityType,
+                createdByUserId: Auth::id()
+            );
+            
+            // Mettre à jour la TX avec les données blockchain
+            $blockchainTx->update([
+                'status' => BlockchainTransaction::STATUS_SUCCESS,
+                'tx_hash' => $res['data']['transactionHash'] ?? null,
+                'block_number' => $res['data']['blockNumber'] ?? null,
+                'response' => $res
+            ]);
+            
+            \Log::info('✅ Tâche pipeline créée sur blockchain', [
+                'task_id' => $task->id,
+                'task_id_chain' => $res['data']['taskId'] ?? null,
+                'tx_hash' => $blockchainTx->tx_hash,
+                'block_number' => $blockchainTx->block_number
+            ]);
+            
+        } catch (\Throwable $e) {
+            // Marquer la TX comme échouée
+            $blockchainTx->update([
+                'status' => BlockchainTransaction::STATUS_FAILED,
+                'error' => $e->getMessage(),
+                'response' => ['error' => $e->getMessage()]
+            ]);
+            
+            \Log::warning('⚠️ Blockchain task creation failed (graceful degradation)', [
+                'task_id' => $task->id,
+                'entity_type' => $entityType,
+                'entity_id' => $entityId,
+                'error' => $e->getMessage()
+            ]);
+            
+            // Ne pas bloquer la création - la tâche existe déjà en DB
+            // On continue et on retourne quand même la tâche créée
+        }
+
+        // Charger les relations pour la réponse
+        $task->load(['user:id,name', 'assignee:id,name']);
+
         return response()->json([
             'status' => 'success',
-            'data' => $task,
+            'data' => [
+                'task' => $task,
+                'blockchain_info' => [
+                    'status' => $blockchainTx->status,
+                    'tx_hash' => $blockchainTx->tx_hash,
+                    'block_number' => $blockchainTx->block_number,
+                    'task_id_chain' => $blockchainTx->response['data']['taskId'] ?? null
+                ]
+            ],
             'message' => 'Tâche créée avec succès'
-        ]);
+        ], 201);
+        
     } catch (\Exception $e) {
-        \Log::error('Erreur création tâche pipeline: ' . $e->getMessage());
+        \Log::error('❌ Erreur création tâche pipeline', [
+            'entity_type' => $entityType ?? null,
+            'entity_id' => $entityId ?? null,
+            'stage_id' => $stageId ?? null,
+            'user_id' => Auth::id(),
+            'error' => $e->getMessage(),
+            'trace' => $e->getTraceAsString()
+        ]);
+        
         return response()->json([
             'status' => 'error',
-            'message' => 'Une erreur est survenue',
+            'message' => 'Une erreur est survenue lors de la création de la tâche',
             'error' => config('app.debug') ? $e->getMessage() : null
         ], 500);
     }
 }
+
 
 
 }

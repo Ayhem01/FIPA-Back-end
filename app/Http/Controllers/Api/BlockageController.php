@@ -5,6 +5,7 @@ use App\Models\Blockage;
 use App\Services\BlockageService;
 use Illuminate\Http\Request;
 use App\Http\Controllers\Controller;
+use Illuminate\Support\Facades\Auth;
 
 class BlockageController extends Controller
 {
@@ -34,10 +35,9 @@ class BlockageController extends Controller
             'data' => $blockages
         ]);
     }
-    public function indexadmin(Request $request)
+ public function indexadmin(Request $request)
     {
         try {
-            // ✅ Validation des paramètres
             $request->validate([
                 'status' => 'nullable|string|in:actif,resolu,annule,open,resolved,cancelled,in_progress',
                 'priority' => 'nullable|string|in:low,medium,high,critical',
@@ -52,20 +52,24 @@ class BlockageController extends Controller
                 'sort_by' => 'nullable|string|in:created_at,updated_at,priority,status,name',
                 'sort_direction' => 'nullable|string|in:asc,desc'
             ]);
-    
-            // ✅ Construire la requête de base
+
+            $user = $request->user('api') ?? Auth::guard('api')->user();
+            if (!$user) {
+                return response()->json(['success'=>false,'message'=>'Unauthenticated'], 401);
+            }
+            $isAdmin = method_exists($user,'hasRole') && $user->hasRole('admin');
+
             $query = Blockage::with([
                 'assignedUser:id,name,email',
                 'createdByUser:id,name,email',
                 'resolvedBy:id,name,email'
             ]);
-    
-            // ✅ Appliquer les filtres dynamiquement
+
+            // Filtres
             $filters = $request->only([
                 'status', 'priority', 'blockage_type', 'blockable_type',
                 'is_escalated', 'assigned_to', 'created_by', 'date_from', 'date_to'
             ]);
-    
             foreach ($filters as $key => $value) {
                 if ($value !== null && $value !== '') {
                     switch ($key) {
@@ -84,17 +88,49 @@ class BlockageController extends Controller
                     }
                 }
             }
-    
-            // ✅ Tri
+
+            // Portée selon rôle
+            if (!$isAdmin) {
+                $query->where(function ($q) use ($user) {
+                    $q->where('created_by', $user->id)
+                      ->orWhere('assigned_to', $user->id);
+                });
+            }
+
+            // Tri
             $sortBy = $request->sort_by ?? 'created_at';
             $sortDirection = $request->sort_direction ?? 'desc';
             $query->orderBy($sortBy, $sortDirection);
-    
-            // ✅ Pagination
+
+            // Stats basées sur la portée (pas globales)
+            $statsBase = clone $query;
+            $statistics = [
+                'total' => (clone $statsBase)->count(),
+                'by_status' => [
+                    'active' => (clone $statsBase)->whereIn('status', ['actif', 'open', 'in_progress'])->count(),
+                    'resolved' => (clone $statsBase)->whereIn('status', ['resolu', 'resolved'])->count(),
+                    'cancelled' => (clone $statsBase)->whereIn('status', ['annule', 'cancelled'])->count(),
+                ],
+                'by_priority' => [
+                    'low' => (clone $statsBase)->where('priority', 'low')->count(),
+                    'medium' => (clone $statsBase)->where('priority', 'medium')->count(),
+                    'high' => (clone $statsBase)->where('priority', 'high')->count(),
+                    'critical' => (clone $statsBase)->where('priority', 'critical')->count(),
+                ],
+                'by_type' => [
+                    'process' => (clone $statsBase)->where('blockage_type', 'process')->count(),
+                    'data' => (clone $statsBase)->where('blockage_type', 'data')->count(),
+                    'technical' => (clone $statsBase)->where('blockage_type', 'technical')->count(),
+                    'other' => (clone $statsBase)->where('blockage_type', 'other')->count(),
+                ],
+                'escalated_count' => (clone $statsBase)->where('is_escalated', true)->count(),
+                'unassigned_count' => (clone $statsBase)->whereNull('assigned_to')->count(),
+            ];
+
+            // Pagination
             $perPage = $request->per_page ?? 15;
             $blockages = $query->paginate($perPage);
-    
-            // ✅ Transformer la collection sans casser la pagination
+
             $blockages->getCollection()->transform(function ($blockage) {
                 return [
                     'id' => $blockage->id,
@@ -116,54 +152,30 @@ class BlockageController extends Controller
                     'assigned_user' => $blockage->assignedUser,
                     'created_by_user' => $blockage->createdByUser,
                     'resolved_by_user' => $blockage->resolvedBy,
-                    // Infos calculées
                     'days_since_creation' => $blockage->created_at ? $blockage->created_at->diffInDays(now()) : 0,
-'is_overdue' => $blockage->created_at ? $blockage->created_at->addDays(7)->lt(now()) : false,                ];
+                    'is_overdue' => $blockage->created_at ? $blockage->created_at->addDays(7)->lt(now()) : false,
+                ];
             });
-    
-            // ✅ Statistiques globales (optimisées avec groupBy)
-            $statistics = [
-                'total' => Blockage::count(),
-                'by_status' => [
-                    'active' => Blockage::whereIn('status', ['actif', 'open', 'in_progress'])->count(),
-                    'resolved' => Blockage::whereIn('status', ['resolu', 'resolved'])->count(),
-                    'cancelled' => Blockage::whereIn('status', ['annule', 'cancelled'])->count(),
-                ],
-                'by_priority' => [
-                    'low' => Blockage::where('priority', 'low')->count(),
-                    'medium' => Blockage::where('priority', 'medium')->count(),
-                    'high' => Blockage::where('priority', 'high')->count(),
-                    'critical' => Blockage::where('priority', 'critical')->count(),
-                ],
-                'by_type' => [
-                    'process' => Blockage::where('blockage_type', 'process')->count(),
-                    'data' => Blockage::where('blockage_type', 'data')->count(),
-                    'technical' => Blockage::where('blockage_type', 'technical')->count(),
-                    'other' => Blockage::where('blockage_type', 'other')->count(),
-                ],
-                'escalated_count' => Blockage::where('is_escalated', true)->count(),
-                'unassigned_count' => Blockage::whereNull('assigned_to')->count(),
-            ];
-    
+
             return response()->json([
                 'success' => true,
-                'data' => $blockages, // ✅ conserve toute la pagination Laravel
+                'data' => $blockages,
                 'statistics' => $statistics,
                 'filters_applied' => $filters
             ]);
-    
+
         } catch (\Exception $e) {
             \Log::error('Erreur index blockages:', [
                 'message' => $e->getMessage(),
                 'trace' => $e->getTraceAsString()
             ]);
-            
             return response()->json([
                 'success' => false,
                 'message' => 'Erreur lors de la récupération des blockages: ' . $e->getMessage()
             ], 500);
         }
     }
+
 
   
     public function show(Blockage $blockage)
@@ -629,11 +641,21 @@ public function getByStage(Request $request)
     return response()->json(['success' => true, 'data' => $blockage]);
 }
 
-    public function update(Request $request, Blockage $blockage)
+   public function update(Request $request, Blockage $blockage)
     {
-        $data = $request->only(['name', 'description', 'blockage_type', 'status', 'priority', 'assigned_to']);
+        $user = $request->user('api') ?? Auth::guard('api')->user();
+        if (!$user) {
+            return response()->json(['success'=>false,'message'=>'Unauthenticated'], 401);
+        }
+
+        if (!$this->canModify($user, $blockage)) {
+            return response()->json(['success'=>false,'message'=>'Forbidden'], 403);
+        }
+
+        $data = $request->only(['name','description','blockage_type','status','priority','assigned_to']);
         $blockage = $this->service->update($blockage, $data);
-        return response()->json(['success' => true, 'data' => $blockage]);
+
+        return response()->json(['success'=>true,'data'=>$blockage]);
     }
 
     public function resolve(Blockage $blockage, Request $request)
@@ -652,38 +674,53 @@ public function getByStage(Request $request)
     return response()->json(['success' => true, 'data' => $blockage]);
 }
 
-    public function destroy(Blockage $blockage)
+    public function destroy(Request $request, Blockage $blockage)
     {
+        $user = $request->user('api') ?? Auth::guard('api')->user();
+        if (!$user) {
+            return response()->json(['success'=>false,'message'=>'Unauthenticated'], 401);
+        }
+
+        if (!$this->canModify($user, $blockage)) {
+            return response()->json(['success'=>false,'message'=>'Forbidden'], 403);
+        }
+
         $this->service->delete($blockage);
-        return response()->json(['success' => true, 'message' => 'Blocage supprimé']);
+        return response()->json(['success'=>true,'message'=>'Blocage supprimé']);
     }
 
     
     public function escalate(Request $request, Blockage $blockage)
     {
+        $user = $request->user('api') ?? Auth::guard('api')->user();
+        if (!$user) {
+            return response()->json(['success'=>false,'message'=>'Unauthenticated'], 401);
+        }
+
+        // Même règle que update/delete
+        if (!$this->canModify($user, $blockage)) {
+            return response()->json(['success'=>false,'message'=>'Forbidden'], 403);
+        }
+
         try {
-            // Admin fixe avec ID 1
-            $adminId = 1;
-            
-            // Vérifier que l'admin existe
-            $admin = \App\Models\User::find($adminId);
+            // Trouver un admin destinataire
+            $admin = \App\Models\User::role('admin')->first() ?? \App\Models\User::find(1);
             if (!$admin) {
                 return response()->json([
                     'success' => false,
                     'message' => 'Administrateur non trouvé'
                 ], 404);
             }
-    
-            // Mettre à jour le blocage sans envoyer de notification pour l'instant
+
             $blockage->update([
                 'priority'     => 'critical',
                 'is_escalated' => true,
                 'escalated_at' => now(),
-                'assigned_to'  => $adminId
+                'assigned_to'  => $admin->id
             ]);
-            
+
             return response()->json([
-                'success' => true, 
+                'success' => true,
                 'message' => 'Blocage escaladé avec succès à l\'administrateur',
                 'data' => $blockage->load(['assignedUser'])
             ]);
@@ -693,5 +730,13 @@ public function getByStage(Request $request)
                 'message' => 'Erreur lors de l\'escalade du blocage: ' . $e->getMessage()
             ], 500);
         }
+    }
+     private function canModify($user, Blockage $blockage): bool
+    {
+        if (method_exists($user,'hasRole') && $user->hasRole('admin')) {
+            return true;
+        }
+        return (int)$blockage->created_by === (int)$user->id
+            || (int)$blockage->assigned_to === (int)$user->id;
     }
 }

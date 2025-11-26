@@ -35,8 +35,10 @@ use App\Http\Controllers\Api\EtapeController;
 use App\Http\Controllers\Api\ContactController;
 use App\Http\Controllers\Api\ProspectController;
 use App\Http\Controllers\Api\InvestisseurController;
+use App\Http\Controllers\Api\UserController;
 use GuzzleHttp\Middleware;
 use Illuminate\Support\Facades\Mail;
+use Illuminate\Http\Request;
 
 
 /*
@@ -49,22 +51,46 @@ use Illuminate\Support\Facades\Mail;
 | be assigned to the "api" middleware group. Make something great!
 |
 */
+Route::get('/check', function (Request $request) {
+    $user = $request->user('api'); // Passport guard
+    if (!$user) {
+        return response()->json(['message' => 'Unauthenticated.'], 401);
+    }
+    return [
+        'ok' => true,
+        'id' => $user->id,
+        'email' => $user->email,
+        'roles' => method_exists($user,'getRoleNames') ? $user->getRoleNames() : [],
+    ];
+})->middleware('auth:api');
 
-Route::group(['namespace' => 'Api', 'prefix' => 'auth'], function () {
-  Route::post('register', [AuthenticationController::class, 'register']);
-  Route::post('login', [AuthenticationController::class, 'login']);
-  Route::get('logout', [AuthenticationController::class, 'destroy'])->middleware('auth:api');
-  Route::post('change-password', [AuthenticationController::class, 'changePassword'])->middleware('auth:api');
-  Route::post('forgot-password', [AuthenticationController::class, 'forgotPassword']);
-  Route::post('reset-password', [AuthenticationController::class, 'resetPassword']);
-  Route::post('verify2fa', [AuthenticationController::class, 'verify2FA'])->middleware('auth:api');
-  Route::post('enable2fa', [AuthenticationController::class, 'enable2FA'])->middleware('auth:api');
-  Route::get('server-time', [AuthenticationController::class, 'getServerTime'])->middleware('auth:api');
-  Route::get('two-factor-status', [AuthenticationController::class, 'twoFactorStatus'])->middleware('auth:api');
-  Route::post('disable2fa', [AuthenticationController::class, 'disable2FA'])->middleware('auth:api');
-  Route::post('verify-login-2fa', [AuthenticationController::class, 'verifyLogin2FA'])->middleware('auth:api', 'scope:2fa-temp');
-  Route::get('users', [AuthenticationController::class, 'getAllUsers'])->middleware(['auth:api', 'role:admin']);
-  Route::get('user', [AuthenticationController::class, 'getCurrentUser'])->middleware('auth:api');
+Route::prefix('auth')->group(function () {
+    // Public
+    Route::post('login', [AuthenticationController::class, 'login']);
+    Route::post('forgot-password', [AuthenticationController::class, 'forgotPassword']);
+    Route::post('reset-password', [AuthenticationController::class, 'resetPassword']);
+
+    // Admin only
+    Route::post('register', [AuthenticationController::class, 'register'])
+        ->middleware(['auth:api', 'role:admin']);
+    Route::get('users', [AuthenticationController::class, 'getAllUsers'])
+        ->middleware(['auth:api', 'role:admin|responsable fipa']);
+
+    // Authentifié: admin ou responsable fipa
+    Route::middleware(['auth:api', 'role:admin|responsable fipa'])->group(function () {
+        Route::get('logout', [AuthenticationController::class, 'destroy']);
+        Route::post('change-password', [AuthenticationController::class, 'changePassword']);
+        Route::post('verify2fa', [AuthenticationController::class, 'verify2FA']);
+        Route::post('enable2fa', [AuthenticationController::class, 'enable2FA']);
+        Route::get('server-time', [AuthenticationController::class, 'getServerTime']);
+        Route::get('two-factor-status', [AuthenticationController::class, 'twoFactorStatus']);
+        Route::post('disable2fa', [AuthenticationController::class, 'disable2FA']);
+        Route::get('user', [AuthenticationController::class, 'getCurrentUser']);
+    });
+
+    // Étape 2FA du login (token avec scope 2fa-temp)
+    Route::post('verify-login-2fa', [AuthenticationController::class, 'verifyLogin2FA'])
+        ->middleware(['auth:api', 'scope:2fa-temp']);
 });
 Route::group(['prefix' => 'media', 'namespace' => 'Api', 'middleware' => ['auth:api']], function () {
 
@@ -205,194 +231,244 @@ Route::group(['namespace' => 'Api', 'prefix' => 'demarchage_direct'], function (
   Route::put('/{id}', [DemarchageDirectController::class, 'update']);
   Route::delete('/delete/{id}', [DemarchageDirectController::class, 'destroy']);
 });
-Route::group(['namespace' => 'Api', 'prefix' => 'tasks'], function () {
-  Route::get('/calendar', [TaskController::class, 'getCalendarTasks'])->middleware('auth:api');
-  Route::post('/{task}/move', [TaskController::class, 'moveTask'])->middleware('auth:api');
-  Route::patch('/{task}/status', [TaskController::class, 'updateStatus'])->middleware('auth:api');
-  Route::get('/myTasks', [TaskController::class, 'getMyTasks'])->middleware('auth:api');
-  Route::get('/dashboard/stats', [TaskController::class, 'getDashboardStats'])->middleware('auth:api');
-  Route::post('/', [TaskController::class, 'store'])->middleware('auth:api');
-  Route::get('/all', [TaskController::class, 'index'])->middleware('auth:api');
-  Route::get('/show/{id}', [TaskController::class, 'show'])->middleware('auth:api');
-  Route::put('/{id}', [TaskController::class, 'update'])->middleware('auth:api');
-  Route::delete('/delete/{id}', [TaskController::class, 'destroy'])->middleware('auth:api');
-  Route::get('my-tasks', [TaskController::class, 'getUserTasks'])->middleware('auth:api');
-  // Route::get('/pipeline', [TaskController::class, 'getTasksByPipelineStage'])->middleware('auth:api');
-  // Route::get('/by-stage', [TaskController::class, 'getTasksByPipelineStage'])->middleware('auth:api');
-  Route::get('/', [TaskController::class, 'index'])->middleware('auth:api');
-  // Route::get('/pipeline/{entityType}/{entityId}/tasks', [TaskController::class, 'getAllPipelineTasks'])->middleware('auth:api');
-  // Route::get('/pipeline/{entityType}/{entityId}/stages/{stageId}/tasks', [TaskController::class, 'getPipelineTasks'])->middleware('auth:api');
 
-  Route::get('/pipeline/{entityType}/{entityId}/tasks', [TaskController::class, 'getAllPipelineTasks']);
-  Route::get('/pipeline/{entityType}/{entityId}/stages/{stageId}/tasks', [TaskController::class, 'getPipelineTasks']);
+Route::get('/users/all-with-roles', [UserController::class, 'index2'])
+    ->middleware(['auth:api','role:responsable fipa']);
 
-  // Route::post('/{entityType}/{entityId}/{stageId}', [TaskController::class, 'createPipelineTask'])->middleware('auth:api');
-  // Route::get('/{entityType}/{entityId}/{stageId}', [TaskController::class, 'getPipelineTasks'])->middleware('auth:api');
-});
+Route::prefix('tasks')
+    ->middleware(['auth:api', 'role:admin|responsable fipa'])
+    ->group(function () {
+        // Route::get('/', [TaskController::class, 'index']);
+        Route::get('/all', [TaskController::class, 'index']);
+        Route::get('/show/{id}', [TaskController::class, 'show']);
+
+        Route::post('/', [TaskController::class, 'store']);
+        Route::put('/{id}', [TaskController::class, 'update']);
+        Route::delete('/delete/{id}', [TaskController::class, 'destroy']);
+
+        Route::get('/calendar', [TaskController::class, 'getCalendarTasks']);
+        Route::get('/dashboard/stats', [TaskController::class, 'getDashboardStats']);
+        Route::get('/myTasks', [TaskController::class, 'getMyTasks']);
+        Route::get('/my-tasks', [TaskController::class, 'getUserTasks']);
+
+        Route::post('/{task}/move', [TaskController::class, 'moveTask']);
+        Route::patch('/{task}/status', [TaskController::class, 'updateStatus']);
+
+        Route::get('/pipeline/{entityType}/{entityId}/tasks', [TaskController::class, 'getAllPipelineTasks']);
+        Route::get('/pipeline/{entityType}/{entityId}/stages/{stageId}/tasks', [TaskController::class, 'getPipelineTasks']);
+    });
 
 
 
-Route::group(['namespace' => 'Api', 'prefix' => 'projects'], function () {
-  Route::get('/total-blocked-projects', [ProjectController::class, 'totalBlockedProjects']); // Somme des projets bloqués
-  Route::get('/total-in-production-projects', [ProjectController::class, 'totalInProductionProjects']); // Somme des projets en production
-  Route::get('/total-in-progress-projects', [ProjectController::class, 'totalInProgressProjects']); // Somme des projets en cours
-  Route::get('/total-idea-projects', [ProjectController::class, 'totalIdeaProjects']); // Somme des projets en idée
-  Route::get('/total-jobs', [ProjectController::class, 'totalJobs']); // Nombre total d'emplois
-  Route::get('/investment-by-sector', [ProjectController::class, 'investmentBySector']); // Montant total d'investissement par secteur
-  Route::get('/projects-by-status', [ProjectController::class, 'projectsByStatus']); // Nombre de projets par statut
-  Route::get('/jobs-by-sector', [ProjectController::class, 'jobsBySector']); // Nombre total d'emplois par secteur
-  Route::get('/projects-by-month', [ProjectController::class, 'projectsByMonth']); // Nombre de projets par mois
-  Route::get('/delayed-projects', [ProjectController::class, 'delayedProjects']); // Projets en retard
-  Route::get('/average-progression', [ProjectController::class, 'averageProgression']); // Progression moyenne des projets
-  Route::get('/average-investment', [ProjectController::class, 'averageInvestment']); // Montant moyen d'investissement par projet
-  Route::get('/projects-by-year', [ProjectController::class, 'projectsByYear']); // Nombre de projets par année
-  Route::get('/projects-by-responsable', [ProjectController::class, 'projectsByResponsable']); // Nombre de projets par responsable
-  Route::get('/high-investment-projects', [ProjectController::class, 'highInvestmentProjects']); // Projets avec des investissements élevés
-  Route::get('/hierarchical-projects-by-sector', [ProjectController::class, 'hierarchicalProjectsBySector']);
-  Route::get('/pipeline-progression', [ProjectController::class, 'pipelineProgression']);
-  Route::get('/investment-by-region', [ProjectController::class, 'investmentByRegion']);
-  
-  Route::get('/', [ProjectController::class, 'index']);
-  Route::post('/', [ProjectController::class, 'store']);
-  Route::get('/{id}', [ProjectController::class, 'show']);
-  Route::put('/{id}', [ProjectController::class, 'update']);
-  Route::delete('/{id}', [ProjectController::class, 'destroy']);
-  Route::patch('/{id}/status', [ProjectController::class, 'changeStatus']);
-  Route::get('/secteur/{secteurId}', [ProjectController::class, 'getBySecteur']);
-  Route::get('/stats', [ProjectController::class, 'stats']);
-  Route::post('/{id}/pipeline/initialize', [ProjectController::class, 'initializePipeline']);
-  Route::post('/{id}/pipeline/advance', [ProjectController::class, 'advanceStage']);
-  Route::patch('/{id}/pipeline/stage', [ProjectController::class, 'updatePipelineStage']);
-  Route::get('/{id}/pipeline', [ProjectController::class, 'getPipelineStatus']);
-  Route::post('/from-investisseur', [ProjectController::class, 'createFromInvestisseur']);
-  Route::get('/investisseur/{investisseurId}/data', [ProjectController::class, 'getInvestisseurDataForProject']);
-  Route::post('/{id}/finalize-pipeline', [ProjectController::class, 'finalizePipelineProgression']);
-});
+Route::prefix('projects')
+    ->middleware(['auth:api', 'role:admin|responsable fipa'])
+    ->group(function () {
+        // Analytics
+        Route::get('/total-blocked-projects', [ProjectController::class, 'totalBlockedProjects']);
+        Route::get('/total-in-production-projects', [ProjectController::class, 'totalInProductionProjects']);
+        Route::get('/total-in-progress-projects', [ProjectController::class, 'totalInProgressProjects']);
+        Route::get('/total-idea-projects', [ProjectController::class, 'totalIdeaProjects']);
+        Route::get('/total-jobs', [ProjectController::class, 'totalJobs']);
+        Route::get('/investment-by-sector', [ProjectController::class, 'investmentBySector']);
+        Route::get('/projects-by-status', [ProjectController::class, 'projectsByStatus']);
+        Route::get('/jobs-by-sector', [ProjectController::class, 'jobsBySector']);
+        Route::get('/projects-by-month', [ProjectController::class, 'projectsByMonth']);
+        Route::get('/delayed-projects', [ProjectController::class, 'delayedProjects']);
+        Route::get('/average-progression', [ProjectController::class, 'averageProgression']);
+        Route::get('/average-investment', [ProjectController::class, 'averageInvestment']);
+        Route::get('/projects-by-year', [ProjectController::class, 'projectsByYear']);
+        Route::get('/projects-by-responsable', [ProjectController::class, 'projectsByResponsable']);
+        Route::get('/high-investment-projects', [ProjectController::class, 'highInvestmentProjects']);
+        Route::get('/hierarchical-projects-by-sector', [ProjectController::class, 'hierarchicalProjectsBySector']);
+        Route::get('/pipeline-progression', [ProjectController::class, 'pipelineProgression']);
+        Route::get('/investment-by-region', [ProjectController::class, 'investmentByRegion']);
+
+        // CRUD
+        Route::get('/', [ProjectController::class, 'index']);
+        Route::post('/', [ProjectController::class, 'store']);
+        Route::get('/{id}', [ProjectController::class, 'show']);
+        Route::put('/{id}', [ProjectController::class, 'update']);
+        Route::delete('/{id}', [ProjectController::class, 'destroy']);
+
+        // Status & Pipeline
+        Route::patch('/{id}/status', [ProjectController::class, 'changeStatus']);
+        Route::post('/{id}/pipeline/initialize', [ProjectController::class, 'initializePipeline']);
+        Route::post('/{id}/pipeline/advance', [ProjectController::class, 'advanceStage']);
+        Route::patch('/{id}/pipeline/stage', [ProjectController::class, 'updatePipelineStage']);
+        Route::get('/{id}/pipeline', [ProjectController::class, 'getPipelineStatus']);
+        Route::post('/{id}/finalize-pipeline', [ProjectController::class, 'finalizePipelineProgression']);
+
+        // Liaison investisseur
+        Route::post('/from-investisseur', [ProjectController::class, 'createFromInvestisseur']);
+        Route::get('/investisseur/{investisseurId}/data', [ProjectController::class, 'getInvestisseurDataForProject']);
+
+        // Filtres
+        Route::get('/secteur/{secteurId}', [ProjectController::class, 'getBySecteur']);
+        Route::get('/stats', [ProjectController::class, 'stats']);
+    });
 
 
 
 // Routes pour les types de pipeline et étapes
-Route::group(['namespace' => 'Api', 'prefix' => 'pipeline'], function () {
-  // Types de pipeline
-  Route::get('/types/all', [ProjectPipelineTypeController::class, 'index']);
-  Route::get('/types/show/{id}', [ProjectPipelineTypeController::class, 'show']);
-  Route::post('/types', [ProjectPipelineTypeController::class, 'store']);
-  Route::put('/types/{id}', [ProjectPipelineTypeController::class, 'update']);
-  Route::delete('/types/delete/{id}', [ProjectPipelineTypeController::class, 'destroy']);
-});
-// Routes pour les statistiques/dashboard
-Route::group(['namespace' => 'Api', 'prefix' => 'stats'], function () {
-  Route::get('/projects-by-status', [StatsController::class, 'projectsByStatus']);
-  // Route::get('/projects-by-sector', [StatsController::class, 'projectsBySector']);
-  Route::get('/investment-by-region', [StatsController::class, 'investmentByRegion']);
-  // Route::get('/jobs-created', [StatsController::class, 'jobsCreated']);
-});
-Route::group(['namespace' => 'Api', 'prefix' => 'contacts'], function () {
-  Route::get('/', [ProjectContactController::class, 'index']);
-  Route::post('/', [ProjectContactController::class, 'store']);
-  Route::get('/{contact}', [ProjectContactController::class, 'show']);
-  Route::put('/{contact}', [ProjectContactController::class, 'update']);
-  Route::delete('/{contact}', [ProjectContactController::class, 'destroy']);
-  Route::put('/{contact}/set-primary', [ProjectContactController::class, 'setPrimary']);
-  Route::get('/project/{project}', [ProjectContactController::class, 'contactsByProject']);
+Route::prefix('pipeline')->group(function () {
+    // Lecture protégée
+    Route::middleware(['auth:api','role:admin|responsable fipa'])->group(function () {
+        Route::get('/types/all', [ProjectPipelineTypeController::class, 'index']);
+        Route::get('/types/show/{id}', [ProjectPipelineTypeController::class, 'show']);
+    });
+
+    // Gestion (admin only)
+    Route::middleware(['auth:api','role:admin'])->group(function () {
+        Route::post('/types', [ProjectPipelineTypeController::class, 'store']);
+        Route::put('/types/{id}', [ProjectPipelineTypeController::class, 'update']);
+        Route::delete('/types/delete/{id}', [ProjectPipelineTypeController::class, 'destroy']);
+    });
 });
 
-Route::group(['namespace' => 'Api', 'prefix' => 'invites'], function () {
-  Route::get('/stats', [InviteController::class, 'stats']);
-  Route::get('/dashboard', [InviteController::class, 'dashboard']);
-  
-  // Charts individuels
-  Route::get('/charts/status', [InviteController::class, 'chartByStatus']);
-  Route::get('/charts/potentiel', [InviteController::class, 'chartByPotentiel']);
-  Route::get('/charts/evolution', [InviteController::class, 'chartEvolutionMensuelle']);
-  Route::get('/charts/pays', [InviteController::class, 'chartByPays']);
-  Route::get('/charts/secteur', [InviteController::class, 'chartBySecteur']);
-  Route::get('/charts/pipeline', [InviteController::class, 'chartPipelineProgression']);
-  Route::get('/charts/conversion', [InviteController::class, 'chartConversionRate']);
-  Route::get('/charts/type', [InviteController::class, 'chartByType']);
-  Route::get('/charts/entreprises', [InviteController::class, 'chartTopEntreprises']);
-  Route::get('/charts/heatmap', [InviteController::class, 'chartHeatmapCreation']);
+// Stats (admin|responsable fipa)
+Route::prefix('stats')
+    ->middleware(['auth:api','role:admin|responsable fipa'])
+    ->group(function () {
+        Route::get('/projects-by-status', [StatsController::class, 'projectsByStatus']);
+        // Route::get('/projects-by-sector', [StatsController::class, 'projectsBySector']);
+        Route::get('/investment-by-region', [StatsController::class, 'investmentByRegion']);
+        // Route::get('/jobs-created', [StatsController::class, 'jobsCreated']);
+    });
+// Route::group(['namespace' => 'Api', 'prefix' => 'contacts'], function () {
+//   Route::get('/', [ProjectContactController::class, 'index']);
+//   Route::post('/', [ProjectContactController::class, 'store']);
+//   Route::get('/{contact}', [ProjectContactController::class, 'show']);
+//   Route::put('/{contact}', [ProjectContactController::class, 'update']);
+//   Route::delete('/{contact}', [ProjectContactController::class, 'destroy']);
+//   Route::put('/{contact}/set-primary', [ProjectContactController::class, 'setPrimary']);
+//   Route::get('/project/{project}', [ProjectContactController::class, 'contactsByProject']);
+// });
 
+Route::prefix('invites')->group(function () {
+    // Public (liens email)
+    Route::get('confirm/{token}', [InviteController::class, 'confirm'])->name('invitations.confirm');
+    Route::get('decline/{token}', [InviteController::class, 'decline'])->name('invitations.decline');
 
-  Route::get('/invites-by-country', [InviteController::class, 'invitesByCountry']);
+    // Authentifié: admin ou responsable fipa
+    Route::middleware(['auth:api', 'role:admin|responsable fipa'])->group(function () {
+        // Stats / Dashboard / Charts
+        Route::get('/stats', [InviteController::class, 'stats']);
+        Route::get('/dashboard', [InviteController::class, 'dashboard']);
+        Route::get('/charts/status', [InviteController::class, 'chartByStatus']);
+        Route::get('/charts/potentiel', [InviteController::class, 'chartByPotentiel']);
+        Route::get('/charts/evolution', [InviteController::class, 'chartEvolutionMensuelle']);
+        Route::get('/charts/pays', [InviteController::class, 'chartByPays']);
+        Route::get('/charts/secteur', [InviteController::class, 'chartBySecteur']);
+        Route::get('/charts/conversion', [InviteController::class, 'chartConversionRate']);
+        Route::get('/charts/type', [InviteController::class, 'chartByType']);
+        Route::get('/invites-by-country', [InviteController::class, 'invitesByCountry']);
 
-  Route::get('/', [InviteController::class, 'index']);
-  Route::post('/', [InviteController::class, 'store']);
-  Route::get('/{id}', [InviteController::class, 'show']);
-  Route::put('/{id}', [InviteController::class, 'update']);
-  Route::patch('/{id}/status', [InviteController::class, 'updateStatus']);
-  Route::delete('/{id}', [InviteController::class, 'destroy']);
-  Route::get('/entreprise/{entrepriseId}', [InviteController::class, 'getByEntreprise']);
-  Route::post('{id}/send', [InviteController::class, 'sendInvitation']);
-  Route::get('confirm/{token}', [InviteController::class, 'confirm'])->name('invitations.confirm');
-  Route::get('decline/{token}', [InviteController::class, 'decline'])->name('invitations.decline');
-  Route::post('{id}/pipeline/initialize', [InviteController::class, 'initializePipeline']);
-  Route::post('{id}/pipeline/advance', [InviteController::class, 'advanceStage'])->middleware('auth:api');
-  Route::post('{id}/convert-to-prospect', [InviteController::class, 'convertToProspect']);
-  Route::get('{id}/pipeline', [InviteController::class, 'getPipelineStatus'])->middleware('auth:api');
-  // Route::get('{id}/pipeline/tasks', [InviteController::class, 'getAllPipelineTasks'])->middleware('auth:api');
-  // Route::get('{id}/pipeline/stage/{stageId}/tasks', [InviteController::class, 'getPipelineStageTasks'])->middleware('auth:api');
-  // Route::post('/{id}/pipeline/stage/{stageId}/tasks', [InviteController::class, 'createPipelineStageTask'])->middleware('auth:api');
-  Route::get('/{id}/progression', [InviteController::class, 'getProgression']);
-});
+        // Pipeline/Conversion (spécifiques avant /{id})
+        Route::post('{id}/send', [InviteController::class, 'sendInvitation']);
+        Route::post('{id}/pipeline/initialize', [InviteController::class, 'initializePipeline']);
+        Route::post('{id}/pipeline/advance', [InviteController::class, 'advanceStage']);
+        Route::post('{id}/convert-to-prospect', [InviteController::class, 'convertToProspect']);
+        Route::get('{id}/pipeline', [InviteController::class, 'getPipelineStatus']);
+        Route::get('/{id}/progression', [InviteController::class, 'getProgression']);
 
-
-Route::group(['namespace' => 'Api', 'prefix' => 'pipeline-tasks'], function () {
-  Route::post('/{entityType}/{entityId}/{stageId}', [TaskController::class, 'createPipelineTask'])->middleware('auth:api');
-  Route::get('/{entityType}/{entityId}/{stageId}', [TaskController::class, 'getPipelineTasks'])->middleware('auth:api');
-  Route::get('/{entityType}/{entityId}', [TaskController::class, 'getAllPipelineTasks']);
-  Route::put('/{taskId}', [TaskController::class, 'updatePipelineTask']);
-  Route::patch('/{taskId}/status', [TaskController::class, 'updatePipelineTaskStatus'])->middleware('auth:api');
-  Route::patch('/{taskId}/move/{newStageId}', [TaskController::class, 'moveTaskToStage']);
-  Route::delete('/{taskId}', [TaskController::class, 'deletePipelineTask']);
-  Route::get('/{taskId}', [TaskController::class, 'showPipelineTask']);
-});
-
-Route::group(['namespace' => 'Api', 'prefix' => 'blockages'], function () {
-  Route::get('/all', [BlockageController::class, 'indexadmin']); 
-  Route::get('/', [BlockageController::class, 'index']);
-  Route::get('/{blockage}', [BlockageController::class, 'show']);
-  Route::post('/', [BlockageController::class, 'store'])->middleware('auth:api', 'role:admin');
-  Route::put('/{blockage}', [BlockageController::class, 'update']);
-  Route::post('/{blockage}/resolve', [BlockageController::class, 'resolve'])->middleware('auth:api', 'role:admin');
-  Route::delete('/{blockage}', [BlockageController::class, 'destroy']);
-  Route::post('/{blockage}/escalate', [BlockageController::class, 'escalate']);
-  // Route::get('/by-stage', [BlockageController::class, 'getByStage']);
-  Route::get('/{entityType}/{entityId}/stage/{stageId}', [BlockageController::class, 'getBlockages']);
+        // CRUD
+        Route::get('/', [InviteController::class, 'index']);
+        Route::post('/', [InviteController::class, 'store']);
+        Route::put('/{id}', [InviteController::class, 'update']);
+        Route::patch('/{id}/status', [InviteController::class, 'updateStatus']);
+        Route::delete('/{id}', [InviteController::class, 'destroy']);
+        Route::get('/entreprise/{entrepriseId}', [InviteController::class, 'getByEntreprise']);
+        Route::get('/{id}', [InviteController::class, 'show']); // garder après les routes + spécifiques
+    });
 });
 
 
+Route::prefix('pipeline-tasks')
+    ->middleware(['auth:api', 'role:admin|responsable fipa'])
+    ->group(function () {
+        // Par entité/pipeline (routes plus spécifiques d’abord)
+        Route::post('/{entityType}/{entityId}/{stageId}', [TaskController::class, 'createPipelineTask']);
+        Route::get('/{entityType}/{entityId}/{stageId}', [TaskController::class, 'getPipelineTasks']);
+        Route::get('/{entityType}/{entityId}', [TaskController::class, 'getAllPipelineTasks']);
 
-Route::group(['namespace' => 'Api', 'prefix' => 'entreprises'], function () {
-  Route::get('/', [EntrepriseController::class, 'index']);
-  Route::post('/', [EntrepriseController::class, 'store']);
-  Route::get('/{id}', [EntrepriseController::class, 'show']);
-  Route::put('/{id}', [EntrepriseController::class, 'update']);
-  Route::delete('/{id}', [EntrepriseController::class, 'destroy']);
-  Route::patch('/{id}/pipeline-stage', [EntrepriseController::class, 'updatePipelineStage']);
-  Route::get('/search/quick', [EntrepriseController::class, 'search']);
-  Route::get('/dashboard/stats', [EntrepriseController::class, 'stats']);
-});
-Route::group(['namespace' => 'Api', 'prefix' => 'actions'], function () {
-  Route::get('/actions-treemap-data', [ActionController::class, 'getActionsTreemapData']);
+        // Par tâche (CRUD/ops)
+        Route::put('/{taskId}', [TaskController::class, 'updatePipelineTask']);
+        Route::patch('/{taskId}/status', [TaskController::class, 'updatePipelineTaskStatus']);
+        Route::patch('/{taskId}/move/{newStageId}', [TaskController::class, 'moveTaskToStage']);
+        Route::delete('/{taskId}', [TaskController::class, 'deletePipelineTask']);
+        Route::get('/{taskId}', [TaskController::class, 'showPipelineTask']);
+    });
 
-  Route::get('/', [ActionController::class, 'index']);
-  Route::post('/', [ActionController::class, 'store']);
-  Route::get('/{id}', [ActionController::class, 'show']);
-  Route::put('/{id}', [ActionController::class, 'update']);
-  Route::patch('/{id}/status', [ActionController::class, 'updateStatus']);
-  Route::delete('/{id}', [ActionController::class, 'destroy']);
-  Route::get('/entreprise/{entrepriseId}', [ActionController::class, 'getByEntreprise']);
-  Route::get('/calendar/events', [ActionController::class, 'calendar']);
+Route::prefix('blockages')->group(function () {
+    // Admin first (pour que /all passe avant /{blockage})
+    Route::middleware(['auth:api','role:admin|responsable fipa'])->group(function () {
+        Route::get('/all', [BlockageController::class, 'indexadmin']);
+        Route::post('/', [BlockageController::class, 'store']);
+        Route::put('/{blockage}', [BlockageController::class, 'update'])->whereNumber('blockage');
+        Route::post('/{blockage}/resolve', [BlockageController::class, 'resolve'])->whereNumber('blockage');
+        Route::post('/{blockage}/escalate', [BlockageController::class, 'escalate'])->whereNumber('blockage');
+        Route::delete('/{blockage}', [BlockageController::class, 'destroy'])->whereNumber('blockage');
+        Route::get('/{entityType}/{entityId}/stage/{stageId}', [BlockageController::class, 'getBlockages']);
+        Route::get('/', [BlockageController::class, 'index']);
+        Route::get('/{blockage}', [BlockageController::class, 'show'])->whereNumber('blockage');
+    });
+  });
+
+
+
+Route::prefix('entreprises')->group(function () {
+    // Lecture (auth:api, admin ou responsable fipa)
+    Route::middleware(['auth:api','role:admin|responsable fipa'])->group(function () {
+        // Spécifiques avant génériques
+        Route::get('/search/quick', [EntrepriseController::class, 'search']);
+        Route::get('/dashboard/stats', [EntrepriseController::class, 'stats']);
+
+        Route::get('/', [EntrepriseController::class, 'index']);
+        Route::get('/{id}', [EntrepriseController::class, 'show']);
+    });
+
+    // Écriture (admin only)
+    Route::middleware(['auth:api','role:admin'])->group(function () {
+        Route::post('/', [EntrepriseController::class, 'store']);
+        Route::put('/{id}', [EntrepriseController::class, 'update']);
+        Route::delete('/{id}', [EntrepriseController::class, 'destroy']);
+        Route::patch('/{id}/pipeline-stage', [EntrepriseController::class, 'updatePipelineStage']);
+    });
 });
-Route::group(['namespace' => 'Api', 'prefix' => 'etapes'], function () {
-  Route::get('/', [EtapeController::class, 'index']);
-  Route::post('/', [EtapeController::class, 'store']);
-  Route::get('/{id}', [EtapeController::class, 'show']);
-  Route::put('/{id}', [EtapeController::class, 'update']);
-  Route::delete('/{id}', [EtapeController::class, 'destroy']);
-  Route::get('/action/{actionId}', [EtapeController::class, 'getByAction']);
-  Route::put('/reorder', [EtapeController::class, 'reorder']);
+Route::prefix('actions')->group(function () {
+    // Lecture (auth:api, admin|responsable fipa)
+    Route::middleware(['auth:api','role:admin|responsable fipa'])->group(function () {
+        Route::get('/actions-treemap-data', [ActionController::class, 'getActionsTreemapData']);
+        Route::get('/calendar/events', [ActionController::class, 'calendar']);
+        Route::get('/entreprise/{entrepriseId}', [ActionController::class, 'getByEntreprise']);
+
+        Route::get('/', [ActionController::class, 'index']);
+        Route::get('/{id}', [ActionController::class, 'show']);
+    });
+
+    // Écriture (admin only)
+    Route::middleware(['auth:api','role:admin'])->group(function () {
+        Route::post('/', [ActionController::class, 'store']);
+        Route::put('/{id}', [ActionController::class, 'update']);
+        Route::patch('/{id}/status', [ActionController::class, 'updateStatus']);
+        Route::delete('/{id}', [ActionController::class, 'destroy']);
+    });
+});
+Route::prefix('etapes')->group(function () {
+    // Lecture (auth:api, admin|responsable fipa)
+    Route::middleware(['auth:api','role:admin|responsable fipa'])->group(function () {
+        Route::get('/action/{actionId}', [EtapeController::class, 'getByAction']); // spécifique d'abord
+        Route::get('/', [EtapeController::class, 'index']);
+        Route::get('/{id}', [EtapeController::class, 'show']);
+    });
+
+    // Écriture (admin only)
+    Route::middleware(['auth:api','role:admin'])->group(function () {
+        Route::post('/', [EtapeController::class, 'store']);
+        Route::put('/reorder', [EtapeController::class, 'reorder']); // avant /{id}
+        Route::put('/{id}', [EtapeController::class, 'update']);
+        Route::delete('/{id}', [EtapeController::class, 'destroy']);
+    });
 });
 Route::group(['namespace' => 'Api', 'prefix' => 'contacts'], function () {
   Route::get('/', [ContactController::class, 'index']);
@@ -404,20 +480,31 @@ Route::group(['namespace' => 'Api', 'prefix' => 'contacts'], function () {
   Route::get('/entreprise/{entrepriseId}', [ContactController::class, 'getByEntreprise']);
   Route::get('/search/quick', [ContactController::class, 'search']);
 });
-Route::group(['namespace' => 'Api', 'prefix' => 'prospects'], function () {
-  // Routes spécifiques AVANT les routes avec paramètres dynamiques
+Route::prefix('prospects')->group(function () {
+  Route::middleware(['auth:api','role:admin|responsable fipa'])->group(function () {  // Routes spécifiques AVANT les routes avec paramètres dynamiques
+  Route::get('/conversion-time', [ProspectController::class, 'chartConversionTimeAnalysis']);
+  Route::get('/status', [ProspectController::class, 'chartByStatus']);
+  // Route::get('/sector', [ProspectController::class, 'chartBySector']);
+  // Route::get('/country', [ProspectController::class, 'chartByCountry']);
+  Route::get('/evolution', [ProspectController::class, 'chartEvolutionMensuelle']);
+  // Route::get('/pipeline', [ProspectController::class, 'chartPipelineProgression']);
+  Route::get('/conversion', [ProspectController::class, 'chartConversionRate']);
+  Route::get('/responsable', [ProspectController::class, 'chartByResponsable']);
+  Route::get('/value-analysis', [ProspectController::class, 'chartValueAnalysis']);
 
 
   Route::get('/', [ProspectController::class, 'index']);
   Route::post('/', [ProspectController::class, 'store']);
   Route::get('/{id}', [ProspectController::class, 'show']);
+  Route::get('/{id}/on-chain', [ProspectController::class, 'showOnChain']);
   Route::put('/{id}', [ProspectController::class, 'update']);
   Route::delete('/{id}', [ProspectController::class, 'destroy']);
   Route::patch('/{id}/status', [ProspectController::class, 'updateStatus']);
-
+  Route::get('/{id}/on-chain-tasks', [ProspectController::class, 'showOnChainTasks']);
+  Route::get('/{prospectId}/on-chain-tasks/stage/{stageId}', [ProspectController::class, 'showOnChainStageTasks']);
+  Route::get('/{id}/on-chain-progress', [ProspectController::class, 'showOnChainProgress']);
   Route::get('/stats', [ProspectController::class, 'stats']);
   Route::get('/entreprise/{entrepriseId}', [ProspectController::class, 'getByEntreprise']);
-
   // Routes CRUD de base
 
   // Routes du pipeline AVANT show/{id} pour éviter les conflits
@@ -431,7 +518,25 @@ Route::group(['namespace' => 'Api', 'prefix' => 'prospects'], function () {
   // Route::post('/{id}/pipeline/stage/{stageId}/tasks', [ProspectController::class, 'createPipelineStageTask'])->middleware('auth:api');
   // Route::get('/{id}/pipeline/tasks', [ProspectController::class, 'getAllPipelineTasks'])->middleware('auth:api');   
 });
-Route::group(['namespace' => 'Api', 'prefix' => 'investisseurs'], function () {
+
+});
+  Route::prefix('investisseurs')->group(function () {
+    // Lecture (auth:api, admin|responsable fipa)
+    Route::middleware(['auth:api','role:admin|responsable fipa'])->group(function () {
+  Route::get('/stats/global', [InvestisseurController::class, 'statsGlobal']);
+  Route::get('/dashboard/complete', [InvestisseurController::class, 'dashboard']);
+  Route::get('/status', [InvestisseurController::class, 'chartByStatus']);
+  Route::get('/pipeline', [InvestisseurController::class, 'chartPipelineProgression']);
+  Route::get('/evolution', [InvestisseurController::class, 'chartEvolutionMensuelle']);
+  Route::get('/investment-analysis', [InvestisseurController::class, 'chartInvestmentAnalysis']);
+  Route::get('/sector', [InvestisseurController::class, 'chartBySector']);
+  Route::get('/country', [InvestisseurController::class, 'chartByCountry']);
+  Route::get('/responsable', [InvestisseurController::class, 'chartByResponsable']);
+  Route::get('/conversion-funnel', [InvestisseurController::class, 'chartConversionFunnel']);
+  Route::get('/roi-analysis', [InvestisseurController::class, 'chartROIAnalysis']);
+  Route::get('/activity-heatmap', [InvestisseurController::class, 'chartActivityHeatmap']);
+
+
   Route::get('/', [InvestisseurController::class, 'index']);
   Route::post('/', [InvestisseurController::class, 'store']);
   Route::get('/{id}', [InvestisseurController::class, 'show']);
@@ -445,19 +550,44 @@ Route::group(['namespace' => 'Api', 'prefix' => 'investisseurs'], function () {
   Route::get('/{id}/pipeline', [InvestisseurController::class, 'getPipelineStatus']);
   Route::post('/{id}/convert-to-project', [InvestisseurController::class, 'convertToProject']);
 });
-Route::group(['namespace' => 'Api', 'prefix' => 'pipeline-stages'], function () {
-  // Routes génériques pour tous les types d'entités
-  Route::get('/{entityType}', [PipelineStageController::class, 'index'])->middleware('auth:api');
-  Route::get('/{entityType}/{id}', [PipelineStageController::class, 'show'])->middleware('auth:api');
-  Route::get('/{entityType}/{entityId}/stage/{stageId}', [PipelineStageController::class, 'getStageDetails']);
+});
+Route::prefix('pipeline-stages')->group(function () {
+    // Lecture (auth:api, admin|responsable fipa)
+    Route::middleware(['auth:api','role:admin|responsable fipa'])->group(function () {
+        // spécifique avant générique
+        Route::get('/{entityType}/{entityId}/stage/{stageId}', [PipelineStageController::class, 'getStageDetails']);
+        Route::get('/{entityType}', [PipelineStageController::class, 'index']);
+        Route::get('/{entityType}/{id}', [PipelineStageController::class, 'show']);
+    });
 
-  // Routes protégées par le rôle admin
-  Route::middleware('role:admin')->group(function () {
-    Route::post('/{entityType}', [PipelineStageController::class, 'store'])->middleware('auth:api');
-    Route::put('/{entityType}/{id}', [PipelineStageController::class, 'update'])->middleware('auth:api');
-    Route::delete('/{entityType}/{id}', [PipelineStageController::class, 'destroy'])->middleware('auth:api');
-    Route::post('/{entityType}/reorder', [PipelineStageController::class, 'reorder'])->middleware('auth:api');
-  });
+    // Écriture (admin only)
+    Route::middleware(['auth:api','role:admin'])->group(function () {
+        Route::post('/{entityType}', [PipelineStageController::class, 'store']);
+        Route::put('/{entityType}/{id}', [PipelineStageController::class, 'update']);
+        Route::delete('/{entityType}/{id}', [PipelineStageController::class, 'destroy']);
+        Route::post('/{entityType}/reorder', [PipelineStageController::class, 'reorder']);
+    });
+});
+
+Route::prefix('users')->group(function () {
+    // Profil (authentifié)
+    Route::middleware('auth:api')->group(function () {
+        Route::get('/me', [UserController::class, 'me']);
+        Route::put('/me/profile', [UserController::class, 'updateProfile']);
+        Route::get('/me/actions', [UserController::class, 'myActions']);
+        Route::get('/me/actions/stats', [UserController::class, 'myActionsStats']);
+    });
+
+    // Administration (admin only)
+    Route::middleware(['auth:api', 'role:admin'])->group(function () {
+        Route::get('/all', [UserController::class, 'index']);
+        Route::post('/', [UserController::class, 'store']);
+        Route::get('/{id}', [UserController::class, 'show']);
+        Route::put('/{id}', [UserController::class, 'update']);
+        Route::delete('/{id}', [UserController::class, 'destroy']);
+        Route::post('/{id}/roles', [UserController::class, 'assignRoles']);
+        Route::post('/{id}/permissions', [UserController::class, 'assignPermissions']);
+    });
 });
 
 

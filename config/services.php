@@ -13,6 +13,7 @@ return [
     | a conventional file to locate the various service credentials.
     |
     */
+    
 
     'mailgun' => [
         'domain' => env('MAILGUN_DOMAIN'),
@@ -35,5 +36,16 @@ return [
     'client_secret' => env('GOOGLE_CLIENT_SECRET'),
     'redirect' => env('GOOGLE_CLIENT_REDIRECT'),
 ],
+    'blockchain' => [
+        'url'     => env('BLOCKCHAIN_URL', 'http://127.0.0.1:3000'),
+        'api_key' => env('BLOCKCHAIN_API_KEY'),
+        'timeout' => env('BLOCKCHAIN_TIMEOUT', 10),
+    ],
+    'passport' => [
+        'personal_access_client_id' => env('PASSPORT_PERSONAL_ACCESS_CLIENT_ID'),
+        'personal_access_client_secret' => env('PASSPORT_PERSONAL_ACCESS_CLIENT_SECRET'),
+        'password_client_id' => env('PASSPORT_PASSWORD_CLIENT_ID'),
+        'password_client_secret' => env('PASSPORT_PASSWORD_CLIENT_SECRET'),
+],    
 
 ];

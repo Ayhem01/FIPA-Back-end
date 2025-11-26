@@ -14,41 +14,64 @@ use Illuminate\Support\Str;
 use Illuminate\Support\Facades\Mail;
 use RobThree\Auth\TwoFactorAuth;
 use RobThree\Auth\Providers\Qr\BaconQrCodeProvider;
+use Spatie\Permission\Models\Role;
 
 
 
 
 class AuthenticationController extends Controller
 {
-    public function register(Request $request)
-    {
-        // Validation de l'email
-        $request->validate([
-            'name' => 'required|string',
-            'email' => 'required|string|email|unique:users',
-        ]);
-
-        // Générer un mot de passe aléatoire
-        $randomPassword = Str::random(10);
-
-        // Créer un nouvel utilisateur avec le mot de passe généré
-        $user = new User([
-            'name' => $request->name,
-            'email' => $request->email,
-            'password' => bcrypt($randomPassword),
-        ]);
-        $user->save();
-
-        // Envoyer un e-mail contenant le mot de passe généré
-        Mail::raw("Bonjour {$user->name},\n\nVotre compte a été créé avec succès. Voici votre mot de passe : {$randomPassword}\n\nVeuillez le conserver en lieu sûr.", function ($message) use ($user) {
-            $message->to($user->email)
-                ->subject('Votre compte a été créé');
-        });
-
-        return response()->json([
-            'message' => 'Utilisateur créé avec succès. Le mot de passe a été envoyé par e-mail.',
-        ], 201);
+    
+public function register(Request $request)
+{
+    // Autorisation: seul un admin connecté peut créer
+    $authUser = $request->user();
+    if (!$authUser || !$authUser->hasRole('admin')) {
+        return response()->json(['message' => 'Non autorisé'], 403);
     }
+
+    $data = $request->validate([
+        'name'  => 'required|string|max:255',
+        'email' => 'required|string|email|max:255|unique:users,email',
+        'role'  => 'nullable|string|in:admin,responsable fipa'
+    ]);
+
+    $randomPassword = Str::random(12);
+
+    $user = User::create([
+        'name'     => $data['name'],
+        'email'    => $data['email'],
+        'password' => bcrypt($randomPassword),
+    ]);
+
+    // Assigner rôle (par défaut responsable fipa)
+    $roleName = $data['role'] ?? 'responsable fipa';
+    if (Role::where('name', $roleName)->exists()) {
+        $user->assignRole($roleName);
+    }
+
+    try {
+        Mail::raw(
+            "Bonjour {$user->name},\nVotre compte a été créé.\nMot de passe provisoire: {$randomPassword}\nVeuillez le changer après connexion.",
+            function ($message) use ($user) {
+                $message->to($user->email)->subject('Création de votre compte');
+            }
+        );
+    } catch (\Throwable $e) {
+        // Log mais ne bloque pas la création
+        \Log::warning('Mail register échec', ['user_id' => $user->id, 'err' => $e->getMessage()]);
+    }
+
+    return response()->json([
+        'message' => 'Utilisateur créé',
+        'user' => [
+            'id'    => $user->id,
+            'name'  => $user->name,
+            'email' => $user->email,
+            'role'  => $roleName
+        ]
+    ], 201);
+}
 
 
     public function login(Request $request)
@@ -187,17 +210,19 @@ class AuthenticationController extends Controller
     }
 
 
-    public function getCurrentUser(Request $request)
+public function getCurrentUser(Request $request)
 {
-    $user = $request->user();
-    
-    // Ajouter des informations sur le rôle
-    $user->is_admin = $user->hasRole('admin');
-    $user->role = $user->roles()->first() ? $user->roles()->first()->name : null;
-    $user->roles = $user->roles()->pluck('name')->toArray();
-    
+    $user = $request->user()->load('roles');
+
     return response()->json([
-        'user' => $user
+        'user' => [
+            'id'    => $user->id,
+            'name'  => $user->name,
+            'email' => $user->email,
+            'is_admin' => $user->hasRole('admin'),
+            'role' => optional($user->roles->first())->name,
+            'role_names' => $user->getRoleNames()->toArray(),
+        ]
     ]);
 }
 

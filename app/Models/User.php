@@ -26,6 +26,12 @@ class User extends Authenticatable
         'name',
         'email',
         'password',
+        'phone',
+        'position',
+        'address',
+        'birth_date',
+        'gender',
+        'photo',
         'google_id',
         'temp_2fa_secret',
         'google2fa_secret',
@@ -72,4 +78,8 @@ class User extends Authenticatable
     {
         return $this->hasMany(Task::class, 'assignee_id');
     }
+    public function actionsResponsable(): HasMany
+{
+    return $this->hasMany(Action::class, 'responsable_id');
+}
 }

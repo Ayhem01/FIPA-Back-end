@@ -45,9 +45,8 @@ class Investisseur extends Model
         'prochain_contact_prevu',
         'converted_to_project_at',
         'project_id',
-        'pipeline_stage_id',
-        'pipeline_completed_at',
-        'pipeline_completed_by'
+        'pipeline_stage_id'
+        
 
     ];
 
@@ -414,25 +413,25 @@ public function advanceToNextStage($userId, $notes = null): bool
     /**
      * Obtenir le pourcentage de progression dans le pipeline
      */
-    public function progressionPercentage(): int
-    {
-        // ✅ Si le pipeline est marqué comme terminé, retourner 100%
-        if ($this->pipeline_completed_at) {
-            return 100;
-        }
-
-        $totalStages = InvestorPipelineStage::where('is_active', true)->count();
-
-        if ($totalStages === 0) {
-            return 0;
-        }
-
-        $completedStages = $this->pipelineProgressions()
-            ->where('completed', true)
-            ->count();
-
-        return (int) round(($completedStages / $totalStages) * 100);
+   public function progressionPercentage(): int
+{
+    // ✅ Vérifier si converti au lieu de pipeline_completed_at
+    if ($this->converted_to_project_at) {
+        return 100;
     }
+
+    $totalStages = InvestorPipelineStage::where('is_active', true)->count();
+
+    if ($totalStages === 0) {
+        return 0;
+    }
+
+    $completedStages = $this->pipelineProgressions()
+        ->where('completed', true)
+        ->count();
+
+    return (int) round(($completedStages / $totalStages) * 100);
+}
 
     /**
      * Obtenir l'historique des étapes franchies

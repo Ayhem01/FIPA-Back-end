@@ -45,7 +45,7 @@ class Invite extends Model
         'pays_id',
         'secteur_id',
         'potentiel', // 'faible', 'moyen', 'élevé'
-        'token', // Token unique pour confirmation
+        'token', 
         'date_rappel',
         'date_conversion',
         'pipeline_stage_id',

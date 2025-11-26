@@ -19,8 +19,12 @@ use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\DB;
 use App\Models\ProspectPipelineStage;
 use App\Models\ProspectPipelineProgression; // Ajouter aussi celle-ci
+use App\Models\Action; // Import the Action model
 use App\Services\PipelineTaskService; // Import the PipelineTaskService
+use App\Services\BlockchainService;
+use App\Services\BlockchainTxLogger;
 use Carbon\Carbon;
+use Illuminate\Support\Facades\Schema;
 
 
 
@@ -31,6 +35,14 @@ class InviteController extends Controller
     /**
      * Liste des invités avec filtres possibles
      */
+    private function mapStatutToBlockchain(string $statut): string
+{
+    return match ($statut) {
+        'confirmee','participation_confirmee' => 'accepted',
+        'refusee','absente'                   => 'rejected',
+        default                               => 'pending',
+    };
+}
    
 public function index(Request $request)
 {
@@ -90,92 +102,283 @@ public function index(Request $request)
     /**
      * Créer un nouvel invité
      */
-    public function store(InviteRequest $request)
-    {
-        try {
-            $invite = Invite::create($request->validated());
+public function store(InviteRequest $request)
+{
+    $user = auth('api')->user() ?? auth()->user();
+    if (!$user) {
+        return response()->json(['success' => false, 'message' => 'Unauthenticated'], 401);
+    }
 
-            // Initialiser le pipeline automatiquement
-            $invite->initializePipeline(auth()->id());
+    $isAdmin = method_exists($user, 'hasRole') && $user->hasRole('admin');
+    $actionId = $request->input('action_id');
 
+    // Vérification d’autorisation
+    if (!$isAdmin) {
+        if (!$actionId) {
             return response()->json([
-                'success' => true,
-                'message' => 'Invité créé avec succès',
-                'data' => $invite->load(['pipelineStage', 'pipelineProgressions.stage'])
-            ], 201);
-        } catch (\Exception $e) {
-            return InviteExceptionHandler::handle($e);
+                'success' => false,
+                'message' => 'action_id requis pour créer un invité (non admin)'
+            ], 422);
+        }
+
+        $action = Action::find($actionId);
+        if (!$action) {
+            return response()->json(['success' => false, 'message' => 'Action introuvable'], 404);
+        }
+
+        // Déterminer si l’utilisateur est responsable de l’action (support de plusieurs colonnes possibles)
+        $responsableColumns = ['responsable_id', 'user_id', 'created_by'];
+        $isResponsable = false;
+        foreach ($responsableColumns as $col) {
+            if (Schema::hasColumn($action->getTable(), $col) && isset($action->$col) && (int)$action->$col === (int)$user->id) {
+                $isResponsable = true;
+                break;
+            }
+        }
+
+        if (!$isResponsable) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Vous n’êtes pas autorisé à ajouter des invités à cette action'
+            ], 403);
+        }
+    } else {
+        // Admin: si action_id fourni, vérifier existence
+        if ($actionId && !Action::whereKey($actionId)->exists()) {
+            return response()->json(['success' => false, 'message' => 'Action introuvable'], 404);
         }
     }
+
+    // Création + pipeline + blockchain
+    $invite = Invite::create($request->validated());
+    $userId = $user->id;
+    $invite->initializePipeline($userId);
+
+    $tx = BlockchainTxLogger::start('add_inviter', 'invite', $invite->id, [
+        'inviterId'  => (int)$invite->id,
+        'user_id'    => (int)$userId,
+        'nom'        => (string)($invite->nom ?? ''),
+        'prenom'     => (string)($invite->prenom ?? ''),
+        'email'      => (string)($invite->email ?? ''),
+        'telephone'  => (string)($invite->telephone ?? ''),
+        'pays_id'    => (int)($invite->pays_id ?? 0),
+        'secteur_id' => (int)($invite->secteur_id ?? 0),
+    ]);
+
+    try {
+        $service    = app(BlockchainService::class);
+        $inviterId  = (int)$invite->id;
+        $nom        = (string)($invite->nom ?? '');
+        $prenom     = (string)($invite->prenom ?? '');
+        $email      = (string)($invite->email ?? '');
+        $telephone  = (string)($invite->telephone ?? '');
+        $paysId     = (int)($invite->pays_id ?? 0);
+        $secteurId  = (int)($invite->secteur_id ?? 0);
+
+        try {
+            $res = $service->addInviter($inviterId, $nom, $prenom, $email, $telephone, $paysId, $secteurId);
+        } catch (\ArgumentCountError $e) {
+            $res = $service->addInviter($inviterId, $nom, $prenom, $email, $telephone);
+        }
+
+        BlockchainTxLogger::success($tx, $res);
+        $data = $res['data'] ?? [];
+        try {
+            $invite->update([
+                'tx_hash'         => $data['transactionHash'] ?? null,
+                'tx_block_number' => $data['blockNumber'] ?? null,
+            ]);
+        } catch (\Throwable $ignore) {}
+    } catch (\Throwable $e) {
+        BlockchainTxLogger::fail($tx, $e->getMessage());
+        \Log::warning('Blockchain addInviter failed', [
+            'invite_id' => $invite->id,
+            'error'     => $e->getMessage()
+        ]);
+    }
+
+    return response()->json([
+        'success' => true,
+        'message' => 'Invité créé avec succès',
+        'data'    => $invite->load(['pipelineStage','pipelineProgressions.stage'])
+    ], 201);
+}
 
     /**
      * Mettre à jour un invité
      */
-    public function update(InviteRequest $request, $id)
-    {
-        try {
-            $invite = Invite::findOrFail($id);
-            $invite->update($request->validated());
+public function update(InviteRequest $request, $id)
+{
+    try {
+        $invite = Invite::findOrFail($id);
 
-            return response()->json([
-                'success' => true,
-                'message' => 'Invité mis à jour avec succès',
-                'data' => $invite
-            ]);
-        } catch (\Exception $e) {
-            return InviteExceptionHandler::handle($e);
+        $user = auth('api')->user() ?? auth()->user();
+        if (!$user) {
+            return response()->json(['success' => false, 'message' => 'Unauthenticated'], 401);
         }
+        if (!$this->canModifyInvite($user, $invite)) {
+            return response()->json(['success' => false, 'message' => 'Forbidden'], 403);
+        }
+
+        // Mise à jour locale
+        $invite->update($request->validated());
+
+        $mappedStatus = $this->mapStatutToBlockchain($invite->statut);
+
+        $tx = BlockchainTxLogger::start('update_inviter', 'invite', $invite->id, [
+            'inviterId' => (int)$invite->id,
+            'nom'       => $invite->nom,
+            'prenom'    => $invite->prenom,
+            'email'     => $invite->email,
+            'telephone' => $invite->telephone,
+            'status'    => $mappedStatus
+        ]);
+
+        try {
+            $service = app(BlockchainService::class);
+
+            $res = $service->updateInviter(
+                (int)$invite->id,
+                (string)$invite->nom,
+                (string)$invite->prenom,
+                (string)$invite->email,
+                (string)$invite->telephone,
+                $mappedStatus
+            );
+
+            BlockchainTxLogger::success($tx, $res);
+
+            // Mise à jour TX
+            $data = $res['data'] ?? [];
+            $invite->update([
+                'tx_hash'         => $data['transactionHash'] ?? null,
+                'tx_block_number' => $data['blockNumber'] ?? null,
+            ]);
+
+        } catch (\Throwable $e) {
+            BlockchainTxLogger::fail($tx, $e->getMessage());
+        }
+
+        return response()->json([
+            'success' => true,
+            'message' => 'Invité mis à jour',
+            'data'    => $invite
+        ]);
+
+    } catch (\Exception $e) {
+        return InviteExceptionHandler::handle($e);
     }
+}
+
+
 
     /**
      * Mettre à jour le statut d'un invité
      */
-    public function updateStatus(Request $request, $id)
-    {
-        try {
-            $invite = Invite::findOrFail($id);
+public function updateStatus(Request $request, $id)
+{
+    try {
+        $invite = Invite::findOrFail($id);
 
-            $validator = Validator::make($request->all(), [
-                'statut' => 'required|in:en_attente,envoyee,confirmee,refusee,details_envoyes,participation_confirmee,participation_sans_suivi,absente,aucune_reponse'
-            ]);
-
-            if ($validator->fails()) {
-                return response()->json([
-                    'success' => false,
-                    'errors' => $validator->errors()
-                ], 422);
-            }
-
-            $invite->statut = $request->statut;
-            $invite->save();
-
-            return response()->json([
-                'success' => true,
-                'message' => 'Statut de l\'invité mis à jour',
-                'data' => $invite
-            ]);
-        } catch (\Exception $e) {
-            return InviteExceptionHandler::handle($e);
+        $user = auth('api')->user() ?? auth()->user();
+        if (!$user) {
+            return response()->json(['success' => false, 'message' => 'Unauthenticated'], 401);
         }
+        if (!$this->canModifyInvite($user, $invite)) {
+            return response()->json(['success' => false, 'message' => 'Forbidden'], 403);
+        }
+
+        $validator = Validator::make($request->all(), [
+            'statut' => 'required|in:en_attente,envoyee,confirmee,refusee,details_envoyes,participation_confirmee,participation_sans_suivi,absente,aucune_reponse'
+        ]);
+
+        if ($validator->fails()) {
+            return response()->json(['success'=>false,'errors'=>$validator->errors()], 422);
+        }
+
+        $invite->statut = $request->statut;
+        $invite->save();
+
+        $mappedStatus = $this->mapStatutToBlockchain($invite->statut);
+
+        $tx = BlockchainTxLogger::start('update_inviter_status', 'invite', $invite->id, [
+            'inviterId' => (int)$invite->id,
+            'status'    => $mappedStatus
+        ]);
+
+        try {
+            $service = app(BlockchainService::class);
+
+            $res = $service->updateInviter(
+                (int)$invite->id,
+                (string)$invite->nom,
+                (string)$invite->prenom,
+                (string)$invite->email,
+                (string)$invite->telephone,
+                $mappedStatus
+            );
+
+            BlockchainTxLogger::success($tx, $res);
+
+        } catch (\Throwable $e) {
+            BlockchainTxLogger::fail($tx, $e->getMessage());
+        }
+
+        return response()->json([
+            'success' => true,
+            'message' => 'Statut mis à jour',
+            'data'    => $invite
+        ]);
+
+    } catch (\Exception $e) {
+        return InviteExceptionHandler::handle($e);
     }
+}
+
+
 
     /**
      * Supprimer un invité
      */
-    public function destroy($id)
-    {
-        try {
-            $invite = Invite::findOrFail($id);
-            $invite->delete();
+ public function destroy($id)
+{
+    try {
+        $invite = Invite::findOrFail($id);
 
-            return response()->json([
-                'success' => true,
-                'message' => 'Invité supprimé avec succès'
-            ]);
-        } catch (\Exception $e) {
-            return InviteExceptionHandler::handle($e);
+        $user = auth('api')->user() ?? auth()->user();
+        if (!$user) {
+            return response()->json(['success' => false, 'message' => 'Unauthenticated'], 401);
         }
+        if (!$this->canModifyInvite($user, $invite)) {
+            return response()->json(['success' => false, 'message' => 'Forbidden'], 403);
+        }
+
+        $tx = BlockchainTxLogger::start('delete_inviter', 'invite', $invite->id, [
+            'inviterId' => (int)$invite->id
+        ]);
+
+        try {
+            $service = app(BlockchainService::class);
+            $res = $service->deleteInviter((int)$invite->id);
+
+            BlockchainTxLogger::success($tx, $res);
+
+        } catch (\Throwable $e) {
+            BlockchainTxLogger::fail($tx, $e->getMessage());
+        }
+
+        $invite->delete();
+
+        return response()->json([
+            'success' => true,
+            'message' => 'Invité supprimé'
+        ]);
+
+    } catch (\Exception $e) {
+        return InviteExceptionHandler::handle($e);
     }
+}
+
 
     /**
      * Liste des invités par entreprise
@@ -203,29 +406,37 @@ public function index(Request $request)
      * Envoyer l'invitation par email
      */
     public function sendInvitation($id)
-    {
-        try {
-            // Charger l'invitation avec sa relation action
-            $invite = Invite::with('action')->findOrFail($id);
+{
+    try {
+        $invite = Invite::with('action')->findOrFail($id);
 
-            if ($invite->sendInvitation()) {
-                return response()->json([
-                    'success' => true,
-                    'message' => 'Invitation envoyée avec succès',
-                    'data' => $invite->fresh()
-                ]);
+        if ($invite->sendInvitation()) {
+            // TX on-chain
+            $tx = BlockchainTxLogger::start('send_invitation', 'invite', $invite->id, []);
+            try {
+                $res = app(BlockchainService::class)->sendInvitation($invite->id);
+                BlockchainTxLogger::success($tx, $res);
+            } catch (\Throwable $e) {
+                BlockchainTxLogger::fail($tx, $e->getMessage());
+                \Log::warning('Blockchain sendInvitation failed', ['invite_id' => $invite->id, 'error' => $e->getMessage()]);
             }
 
             return response()->json([
-                'success' => false,
-                'message' => "Échec de l'envoi de l'invitation"
-            ], 500);
-        } catch (\Exception $e) {
-            // Ajoutez ce log pour voir l'erreur exacte
-            \Log::error('Erreur dans sendInvitation: ' . $e->getMessage());
-            return InviteExceptionHandler::handle($e);
+                'success' => true,
+                'message' => 'Invitation envoyée avec succès',
+                'data'    => $invite->fresh()
+            ]);
         }
+
+        return response()->json([
+            'success' => false,
+            'message' => "Échec de l'envoi de l'invitation"
+        ], 500);
+    } catch (\Exception $e) {
+        \Log::error('Erreur dans sendInvitation: ' . $e->getMessage());
+        return InviteExceptionHandler::handle($e);
     }
+}
 
     /**
      * Afficher l'état actuel du pipeline pour un invité
@@ -275,80 +486,74 @@ public function index(Request $request)
     /**
      * Gérer la confirmation d'une invitation via le token
      */
-    public function confirm($token)
-    {
-        try {
-            $invite = Invite::where('token', $token)->firstOrFail();
+   public function confirm($token)
+{
+    try {
+        $invite = Invite::where('token', $token)->firstOrFail();
 
-            if ($invite->isConfirmee() || $invite->isRefusee()) {
-                return response()->json([
-                    'success' => false,
-                    'message' => 'Cette invitation a déjà reçu une réponse',
-                    'data' => [
-                        'invite' => $invite,
-                        'statut' => $invite->statut
-                    ]
-                ], 422);
-            }
-
-            $invite->markAsConfirmed();
-
-            return response()->json([
-                'success' => true,
-                'message' => 'Participation confirmée avec succès',
-                'data' => [
-                    'invite' => $invite,
-                    'action' => $invite->action
-                ]
-            ]);
-        } catch (ModelNotFoundException $e) {
+        if ($invite->isConfirmee() || $invite->isRefusee()) {
             return response()->json([
                 'success' => false,
-                'message' => 'Invitation non trouvée ou déjà traitée'
-            ], 404);
-        } catch (\Exception $e) {
-            \Log::error('Erreur lors de la confirmation: ' . $e->getMessage());
-            return response()->json([
-                'success' => false,
-                'message' => "Une erreur s'est produite lors de la confirmation"
-            ], 500);
+                'message' => 'Cette invitation a déjà reçu une réponse',
+                'data'    => ['invite' => $invite, 'statut' => $invite->statut]
+            ], 422);
         }
+
+        $invite->markAsConfirmed();
+
+        // TX on-chain
+        $tx = BlockchainTxLogger::start('accept_invitation', 'invite', $invite->id, []);
+        try {
+            $res = app(BlockchainService::class)->acceptInvitation($invite->id);
+            BlockchainTxLogger::success($tx, $res);
+        } catch (\Throwable $e) {
+            BlockchainTxLogger::fail($tx, $e->getMessage());
+        }
+
+        return response()->json([
+            'success' => true,
+            'message' => 'Participation confirmée avec succès',
+            'data'    => ['invite' => $invite, 'action' => $invite->action]
+        ]);
+    } catch (\Exception $e) {
+        // ...existing code...
+        return InviteExceptionHandler::handle($e);
     }
+}
+
 
     /**
      * Gérer le refus d'une invitation via le token
      */
-    public function decline($token)
-    {
-        try {
-            $invite = Invite::where('token', $token)->firstOrFail();
+  public function decline($token)
+{
+    try {
+        $invite = Invite::where('token', $token)->firstOrFail();
 
-            if ($invite->isConfirmee() || $invite->isRefusee()) {
-                return response()->json([
-                    'success' => false,
-                    'message' => 'Cette invitation a déjà reçu une réponse',
-                    'data' => [
-                        'invite' => $invite,
-                        'statut' => $invite->statut
-                    ]
-                ], 422);
-            }
-
-            $invite->markAsDeclined();
-
-            return response()->json([
-                'success' => true,
-                'message' => 'Participation refusée avec succès',
-                'data' => [
-                    'invite' => $invite,
-                    'action' => $invite->action
-                ]
-            ]);
-        } catch (ModelNotFoundException $e) {
+        if ($invite->isConfirmee() || $invite->isRefusee()) {
             return response()->json([
                 'success' => false,
-                'message' => 'Invitation non trouvée ou déjà traitée'
-            ], 404);
+                'message' => 'Cette invitation a déjà reçu une réponse',
+                'data'    => ['invite' => $invite, 'statut' => $invite->statut]
+            ], 422);
+        }
+
+        $invite->markAsDeclined();
+
+        // TX on-chain
+        $tx = BlockchainTxLogger::start('reject_invitation', 'invite', $invite->id, []);
+        try {
+            $res = app(BlockchainService::class)->rejectInvitation($invite->id);
+            BlockchainTxLogger::success($tx, $res);
+        } catch (\Throwable $e) {
+            BlockchainTxLogger::fail($tx, $e->getMessage());
+        }
+
+        return response()->json([
+            'success' => true,
+            'message' => 'Participation refusée avec succès',
+            'data'    => ['invite' => $invite, 'action' => $invite->action]
+        ]);
         } catch (\Exception $e) {
             \Log::error('Erreur lors du refus: ' . $e->getMessage());
             return response()->json([
@@ -705,151 +910,268 @@ private function createTaskForStage(Invite $invite, ?InvitePipelineStage $stage,
      * Convertir l'invité en prospect
      */
 
-     
-     public function convertToProspect(Request $request, $id)
-     {
-         try {
-             $invite = Invite::with(['pipelineStage'])->findOrFail($id);
-             $userId = auth()->id();
-             
-             if ($invite->isConvertedToProspect()) {
-                 return response()->json([
-                     'success' => true,
-                     'message' => 'Cet invité a déjà été converti en prospect',
-                     'data' => [
-                         'invite' => $invite->append('is_converted'),
-                         'prospect' => $invite->prospect->load(['pipelineStage'])
-                     ]
-                 ]);
-             }
-     
-             // ✅ VÉRIFICATION SIMPLIFIÉE : juste vérifier si on peut convertir
-             if (!$invite->canConvertToProspect()) {
-                 return response()->json([
-                     'success' => false,
-                     'message' => 'L\'invité doit être dans l\'étape finale pour être converti en prospect.'
-                 ], 400);
-             }
-     
-             // Utiliser une transaction pour garantir l'intégrité des données
-             DB::beginTransaction();
-             
-             try {
-                 // ✅ NOUVELLE LOGIQUE : Marquer l'étape finale comme complétée AVANT la conversion
-                 $currentStage = $invite->pipelineStage;
-                 if ($currentStage && $currentStage->is_final) {
-                     $finalProgression = $invite->pipelineProgressions()
-                         ->where('stage_id', $currentStage->id)
-                         ->first();
-     
-                     if ($finalProgression && !$finalProgression->completed) {
-                         $finalProgression->update([
-                             'completed' => true,
-                             'completed_at' => now(),
-                             'notes' => ($finalProgression->notes ?? '') . ' - Complétée automatiquement lors de la conversion en prospect'
-                         ]);
-                     } elseif (!$finalProgression) {
-                         // Créer la progression finale si elle n'existe pas
-                         $invite->pipelineProgressions()->create([
-                             'stage_id' => $currentStage->id,
-                             'completed' => true,
-                             'completed_at' => now(),
-                             'assigned_to' => $userId,
-                             'notes' => 'Étape finale complétée automatiquement lors de la conversion'
-                         ]);
-                     }
-                 }
-     
-                 // Données envoyées par le front
-                 $data = $request->only([
-                     'entreprise_id',
-                     'nom',
-                     'email',
-                     'telephone',
-                     'adresse',
-                     'pays_id',
-                     'secteur_id',
-                     'statut',
-                     'description',
-                     'notes_internes',
-                     'valeur_potentielle',
-                     'devise',
-                     'date_dernier_contact',
-                     'prochain_contact_prevu'
-                 ]);
-                 
-                 // Créer le prospect
-                 $prospect = Prospect::create(array_merge($data, [
-                     'invite_id'       => $invite->id,
-                     'responsable_id'  => $userId,
-                     'created_by'      => $userId,
-                 ]));
-                 
-                 // Marquer l'invité comme converti
-                 $invite->update([
-                     'date_conversion' => now(), 
-                     'is_converted' => true,
-                     'pipeline_completed_at' => now(),  // ✅ NOUVEAU : Marquer le pipeline comme terminé
-                     'pipeline_completed_by' => $userId
-                 ]);
-                 
-                 // Initialiser le pipeline du prospect
-                 $firstStage = ProspectPipelineStage::where('is_active', true)
-                     ->orderBy('order')
-                     ->first();
-                     
-                 if ($firstStage) {
-                     // Définir l'étape initiale
-                     $prospect->update(['pipeline_stage_id' => $firstStage->id]);
-                     
-                     // Créer la première progression
-                     ProspectPipelineProgression::create([
-                         'prospect_id' => $prospect->id,
-                         'stage_id' => $firstStage->id,
-                         'completed' => false,
-                         'assigned_to' => $userId
-                     ]);
-                 }
-                 
-                 DB::commit();
-                 
-                 // Recharger les données avec les relations
-                 $invite->refresh()->append('is_converted');
-                 $prospect->load(['pipelineStage', 'pipelineProgressions.stage']);
-                 
-                 return response()->json([
-                     'success' => true,
-                     'message' => 'Invité converti en prospect avec succès',
-                     'data' => [
-                         'invite' => $invite,
-                         'prospect' => $prospect,
-                         'conversion_info' => [
-                             'pipeline_completed' => true,
-                             'final_stage_completed' => true,
-                             'progression_percentage' => $invite->progressionPercentage(),
-                             'prospect_pipeline_initialized' => !is_null($firstStage)
-                         ]
-                     ]
-                 ]);
-                 
-             } catch (\Exception $e) {
-                 DB::rollBack();
-                 throw $e;
-             }
-         } catch (\Exception $e) {
-             \Log::error('Erreur conversion invité', [
-                 'invite_id' => $id,
-                 'payload'   => $request->all(),
-                 'error'     => $e->getMessage(),
-                 'trace'     => $e->getTraceAsString()
-             ]);
-             
-             return response()->json([
-                 'success' => false,
-                 'message' => "Impossible de convertir l'invité en prospect: " . $e->getMessage()
-             ], 500);
-         }
-     }
+public function convertToProspect(Request $request, $id)
+{
+    try {
+        $invite = Invite::with(['pipelineStage', 'prospect', 'entreprise'])->findOrFail($id);
+        $userId = auth('api')->id() ?? auth()->id();
+
+        if ($invite->isConvertedToProspect()) {
+            return response()->json([
+                'success' => true,
+                'message' => 'Cet invité a déjà été converti en prospect',
+                'data' => [
+                    'invite' => $invite->append('is_converted'),
+                    'prospect' => $invite->prospect?->load(['pipelineStage'])
+                ]
+            ]);
+        }
+
+        if (!$invite->canConvertToProspect()) {
+            return response()->json([
+                'success' => false,
+                'message' => 'L\'invité doit être dans l\'étape finale pour être converti en prospect.'
+            ], 400);
+        }
+
+        // --- PRÉPARATION DES DONNÉES ---
+        $nom = (string)($request->input('nom') ?? $invite->nom ?? 'Prospect');
+        $adresse = (string)($request->input('adresse') ?? $invite->adresse ?? '');
+        $valeurPotentielle = (int)($request->input('valeur_potentielle') ?? 0);
+        $notesInternes = (string)($request->input('notes_internes') ?? $invite->notes_internes ?? '');
+
+        // ========================================
+        // 1️⃣ BLOCKCHAIN: CONVERTIR L'INVITÉ
+        // ========================================
+        $tx1 = BlockchainTxLogger::start('convert_inviter_to_prospect', 'invite', $invite->id, [
+            'inviterId' => (int)$invite->id,
+            'nom' => $nom,
+            'adresse' => $adresse,
+            'valeurPotentielle' => $valeurPotentielle,
+            'notesInternes' => $notesInternes
+        ]);
+
+        $prospectIdFromConversion = null;
+        $conversionTxHash = null;
+        $conversionBlockNumber = null;
+
+        try {
+            $service = app(BlockchainService::class);
+            
+            // ✅ Appel avec les 5 paramètres requis
+            $resConvert = $service->convertInviterToProspect(
+                inviterId: (int)$invite->id,
+                nom: $nom,
+                adresse: $adresse,
+                valeurPotentielle: $valeurPotentielle,
+                notesInternes: $notesInternes
+            );
+            
+            BlockchainTxLogger::success($tx1, $resConvert);
+            
+            $prospectIdFromConversion = $resConvert['data']['prospectId'] ?? null;
+            $conversionTxHash = $resConvert['data']['transactionHash'] ?? null;
+            $conversionBlockNumber = $resConvert['data']['blockNumber'] ?? null;
+            
+            \Log::info('Conversion invité réussie', [
+                'invite_id' => $invite->id,
+                'prospect_id_chain' => $prospectIdFromConversion,
+                'tx_hash' => $conversionTxHash
+            ]);
+            
+        } catch (\Throwable $e) {
+            BlockchainTxLogger::fail($tx1, $e->getMessage());
+            \Log::error('Blockchain conversion failed', [
+                'invite_id' => $invite->id,
+                'error' => $e->getMessage(),
+                'trace' => $e->getTraceAsString()
+            ]);
+            // Ne pas bloquer la conversion locale
+        }
+
+        // ========================================
+        // 2️⃣ BLOCKCHAIN: CRÉER LE PROSPECT
+        // ========================================
+        $tx2 = BlockchainTxLogger::start('create_prospect', 'invite', $invite->id, [
+            'nom' => $nom,
+            'adresse' => $adresse,
+            'valeur_potentielle' => $valeurPotentielle,
+            'notes_internes' => $notesInternes,
+        ]);
+
+        $prospectIdFromCreation = null;
+        $creationTxHash = null;
+        $creationBlockNumber = null;
+
+        try {
+            $service = app(BlockchainService::class);
+            
+            // ✅ Appel route POST /api/prospect
+            $resCreate = $service->createProspectOnChain(
+                nom: $nom,
+                adresse: $adresse,
+                valeurPotentielle: $valeurPotentielle,
+                notesInternes: $notesInternes
+            );
+            
+            BlockchainTxLogger::success($tx2, $resCreate);
+            
+            $prospectIdFromCreation = $resCreate['data']['prospectId'] ?? null;
+            $creationTxHash = $resCreate['data']['transactionHash'] ?? null;
+            $creationBlockNumber = $resCreate['data']['blockNumber'] ?? null;
+            
+            \Log::info('Création prospect réussie', [
+                'invite_id' => $invite->id,
+                'prospect_id_chain' => $prospectIdFromCreation,
+                'tx_hash' => $creationTxHash
+            ]);
+            
+        } catch (\Throwable $e) {
+            BlockchainTxLogger::fail($tx2, $e->getMessage());
+            \Log::error('Blockchain creation failed', [
+                'invite_id' => $invite->id,
+                'error' => $e->getMessage()
+            ]);
+        }
+
+        // ========================================
+        // 3️⃣ BASE DE DONNÉES: CRÉATION DU PROSPECT
+        // ========================================
+        DB::beginTransaction();
+        try {
+            // Marquer l'étape finale comme complétée
+            $currentStage = $invite->pipelineStage;
+            if ($currentStage && $currentStage->is_final) {
+                $finalProgression = $invite->pipelineProgressions()
+                    ->where('stage_id', $currentStage->id)
+                    ->first();
+
+                if ($finalProgression && !$finalProgression->completed) {
+                    $finalProgression->update([
+                        'completed' => true,
+                        'completed_at' => now(),
+                        'notes' => ($finalProgression->notes ?? '') . ' - Complétée automatiquement lors de la conversion en prospect'
+                    ]);
+                } elseif (!$finalProgression) {
+                    $invite->pipelineProgressions()->create([
+                        'stage_id' => $currentStage->id,
+                        'completed' => true,
+                        'completed_at' => now(),
+                        'assigned_to' => $userId,
+                        'notes' => 'Étape finale complétée automatiquement lors de la conversion'
+                    ]);
+                }
+            }
+
+            // Préparer les données du prospect
+            $prospectData = [
+                'invite_id' => $invite->id,
+                'entreprise_id' => $request->input('entreprise_id') ?? $invite->entreprise_id,
+                'nom' => $nom,
+                'email' => $request->input('email') ?? $invite->email,
+                'telephone' => $request->input('telephone') ?? $invite->telephone,
+                'adresse' => $adresse,
+                'pays_id' => $request->input('pays_id') ?? $invite->pays_id,
+                'secteur_id' => $request->input('secteur_id') ?? $invite->secteur_id,
+                'statut' => $request->input('statut') ?? 'nouveau',
+                'description' => $request->input('description') ?? '',
+                'notes_internes' => $notesInternes,
+                'valeur_potentielle' => $valeurPotentielle,
+                'devise' => $request->input('devise') ?? 'EUR',
+                'date_dernier_contact' => $request->input('date_dernier_contact'),
+                'prochain_contact_prevu' => $request->input('prochain_contact_prevu'),
+                'responsable_id' => $userId,
+                'created_by' => $userId,
+                'tx_hash' => $creationTxHash,
+                'tx_block_number' => $creationBlockNumber,
+            ];
+
+            $prospect = Prospect::create($prospectData);
+
+            // Marquer l'invité comme converti
+            $invite->update([
+                'date_conversion' => now(),
+                'is_converted' => true,
+                'pipeline_completed_at' => now(),
+                'pipeline_completed_by' => $userId,
+                'tx_hash' => $conversionTxHash,
+                'tx_block_number' => $conversionBlockNumber,
+            ]);
+
+            // Initialiser le pipeline du prospect
+            $prospectPipelineInitialized = false;
+            $firstStage = ProspectPipelineStage::where('is_active', true)
+                ->orderBy('order')
+                ->first();
+
+            if ($firstStage) {
+                $prospect->update(['pipeline_stage_id' => $firstStage->id]);
+
+                ProspectPipelineProgression::create([
+                    'prospect_id' => $prospect->id,
+                    'stage_id' => $firstStage->id,
+                    'completed' => false,
+                    'assigned_to' => $userId
+                ]);
+
+                $prospectPipelineInitialized = true;
+            }
+
+            DB::commit();
+
+        } catch (\Exception $e) {
+            DB::rollBack();
+            throw $e;
+        }
+
+        // ========================================
+        // 4️⃣ RÉPONSE
+        // ========================================
+        $invite->refresh()->append('is_converted');
+        $prospect->load(['pipelineStage', 'pipelineProgressions.stage']);
+
+        return response()->json([
+            'success' => true,
+            'message' => 'Invité converti en prospect avec succès',
+            'data' => [
+                'invite' => $invite,
+                'prospect' => $prospect,
+                'conversion_info' => [
+                    'pipeline_completed' => true,
+                    'final_stage_completed' => true,
+                    'progression_percentage' => $invite->progressionPercentage(),
+                    'prospect_pipeline_initialized' => $prospectPipelineInitialized
+                ],
+                'blockchain_info' => [
+                    'conversion' => [
+                        'prospect_id' => $prospectIdFromConversion,
+                        'tx_hash' => $conversionTxHash,
+                        'block_number' => $conversionBlockNumber
+                    ],
+                    'creation' => [
+                        'prospect_id' => $prospectIdFromCreation,
+                        'tx_hash' => $creationTxHash,
+                        'block_number' => $creationBlockNumber
+                    ]
+                ]
+            ]
+        ]);
+    } catch (\Exception $e) {
+        \Log::error('Erreur conversion invité', [
+            'invite_id' => $id,
+            'payload' => $request->all(),
+            'error' => $e->getMessage(),
+            'trace' => $e->getTraceAsString()
+        ]);
+
+        return response()->json([
+            'success' => false,
+            'message' => "Impossible de convertir l'invité en prospect: " . $e->getMessage()
+        ], 500);
+    }
+}
+
+
     
 /**
  * Récupérer les données de progression pour un invité
@@ -1285,31 +1607,31 @@ public function chartByType()
 /**
  * Top 10 des entreprises avec le plus d'invités (Bar Chart)
  */
-public function chartTopEntreprises()
-{
-    try {
-        $data = Invite::join('entreprises', 'invites.entreprise_id', '=', 'entreprises.id')
-                     ->select('entreprises.nom as entreprise', DB::raw('COUNT(invites.id) as count'))
-                     ->groupBy('entreprises.nom')
-                     ->orderByDesc('count')
-                     ->limit(10)
-                     ->get()
-                     ->map(function ($item) {
-                         return [
-                             'name' => $item->entreprise,
-                             'value' => $item->count
-                         ];
-                     });
+// public function chartTopEntreprises()
+// {
+//     try {
+//         $data = Invite::join('entreprises', 'invites.entreprise_id', '=', 'entreprises.id')
+//                      ->select('entreprises.nom as entreprise', DB::raw('COUNT(invites.id) as count'))
+//                      ->groupBy('entreprises.nom')
+//                      ->orderByDesc('count')
+//                      ->limit(10)
+//                      ->get()
+//                      ->map(function ($item) {
+//                          return [
+//                              'name' => $item->entreprise,
+//                              'value' => $item->count
+//                          ];
+//                      });
 
-        return response()->json([
-            'success' => true,
-            'data' => $data,
-            'chart_type' => 'bar'
-        ]);
-    } catch (\Exception $e) {
-        return InviteExceptionHandler::handle($e);
-    }
-}
+//         return response()->json([
+//             'success' => true,
+//             'data' => $data,
+//             'chart_type' => 'bar'
+//         ]);
+//     } catch (\Exception $e) {
+//         return InviteExceptionHandler::handle($e);
+//     }
+// }
 
 /**
  * Heatmap des invitations par jour de la semaine et heure
@@ -1391,6 +1713,32 @@ private function getStatusLabel($status)
 
     return $labels[$status] ?? ucfirst($status);
 }
-    
+  private function canModifyInvite($user, Invite $invite): bool
+    {
+        // Admin a tous les droits
+        if (method_exists($user, 'hasRole') && $user->hasRole('admin')) {
+            return true;
+        }
+
+        // Si pas d'action liée, refuser (sauf admin)
+        if (!$invite->action_id) {
+            return false;
+        }
+
+        // Charger l'action et vérifier le responsable
+        $action = Action::find($invite->action_id);
+        if (!$action) {
+            return false;
+        }
+
+        // Vérifier les colonnes possibles pour le responsable
+        $responsableColumns = ['responsable_id', 'user_id', 'created_by'];
+        foreach ($responsableColumns as $col) {
+            if (Schema::hasColumn($action->getTable(), $col) && isset($action->$col) && (int)$action->$col === (int)$user->id) {
+                return true;
+            }
+        }
+        return false;
+    }   
 
 }
